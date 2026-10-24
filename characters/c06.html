@@ -123,7 +123,8 @@ const C = {
   apron: 0x3d7484, apronDot: 0x9ff7e6, pants: 0x262d4a, shoes: 0x3f8f95,
   eye: 0x2c2638, cheek: 0xf59fb6, mouth: 0x9c4d60, tie: 0x8f6bff,
 };
-const O = { hair: 0xb48cff, shirt: 0x9ff3ff, apron: 0x6fffd6, pants: 0x7a8cff, skin: 0x9fd8ff, shoes: 0x6fffd6 };
+// apron: 輪郭の光が強すぎたので、ミントのまま明るさを約6割に（元 0x6fffd6）
+const O = { hair: 0xb48cff, shirt: 0x9ff3ff, apron: 0x43997f, pants: 0x7a8cff, skin: 0x9fd8ff, shoes: 0x6fffd6 };
 
 function part(parent, geo, color, outline, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
   const m = new THREE.Mesh(geo, toon(color));
@@ -201,7 +202,7 @@ function makeChara() {
   const skirt = part(hips, skirtGeo, C.apron, O.apron, [0, 0, 0], [0, 0, 0], [1.1, 1, 0.92]);
   skirt.material.side = THREE.DoubleSide;
   // "data rain" dots down the front of the skirt, like the reference
-  const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(C.apronDot).multiplyScalar(1.3) });
+  const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(C.apronDot).multiplyScalar(0.9) });
   const rAt = (y) => { for (let i = 1; i < skirtPts.length; i++) { const a = skirtPts[i - 1], b = skirtPts[i]; if (y <= a.y && y >= b.y) return a.x + (b.x - a.x) * (a.y - y) / (a.y - b.y); } return 0.13; };
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   for (let col = -4; col <= 4; col++) {

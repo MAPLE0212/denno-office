@@ -2,6 +2,10 @@
 firmware/denno_config.h
 server/members.json
 
+# 自分用のキャラ制作メモと参考画像（git には入れない）
+PROGRESS.md
+reference.png
+
 # 実行中にできるもの
 server/data/
 server/sprites/
