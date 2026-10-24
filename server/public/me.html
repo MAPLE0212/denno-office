@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マイページ｜電脳オフィス</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+.hero { display: grid; grid-template-columns: 104px 1fr; gap: 18px; align-items: center; }
+.hero .who { font-size: 22px; font-weight: 700; line-height: 1.3; }
+.hero .seat { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.hero .row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 10px; }
+
+.presence {
+  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 999px; padding: 6px 16px 6px 8px;
+  font-weight: 700; transition: border-color .15s, box-shadow .15s;
+}
+.presence .knob { width: 40px; height: 22px; border-radius: 999px; background: #1e2840; position: relative; transition: background .15s; }
+.presence .knob::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--away); transition: left .15s, background .15s;
+}
+.presence[aria-pressed="true"] { border-color: var(--ok); box-shadow: 0 0 12px rgba(126, 224, 184, .25); }
+.presence[aria-pressed="true"] .knob { background: rgba(126, 224, 184, .25); }
+.presence[aria-pressed="true"] .knob::after { left: 21px; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.presence:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+
+.now { min-height: 54px; display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.now .left { font-size: 12px; color: var(--muted); padding-bottom: 4px; }
+.now .empty { color: var(--muted); font-size: 13px; }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.inputrow { display: flex; gap: 8px; align-items: stretch; }
+.inputrow input {
+  flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+}
+.inputrow .count { font-family: var(--font-mono); font-size: 12px; color: var(--muted); align-self: center; min-width: 44px; text-align: right; }
+.inputrow .count.over { color: var(--danger); }
+.sendrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 12px; }
+.sendrow .actions { display: flex; gap: 8px; }
+
+.chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.char {
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 6px 6px 8px;
+  text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.char:hover:not(:disabled) { border-color: var(--accent); }
+.char[aria-pressed="true"] { border-color: var(--glow); box-shadow: 0 0 0 1px var(--glow), 0 0 16px rgba(127, 162, 255, .35); }
+.char:disabled { cursor: default; opacity: .5; }
+.char .meta { padding: 0 4px; }
+.char .id { font-family: var(--font-mono); font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 4px; }
+.char .id .st { font-family: var(--font-body); }
+.char .label { font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.char .used { font-size: 11px; color: var(--accent); }
+
+.pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.pick a {
+  display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 8px; color: var(--fg);
+}
+.pick a:hover { border-color: var(--accent); text-decoration: none; }
+.pick small { display: block; font-family: var(--font-mono); color: var(--muted); font-size: 11px; }
+
+@media (max-width: 480px) {
+  .hero { grid-template-columns: 76px 1fr; gap: 14px; }
+  .hero .who { font-size: 19px; }
+  .chars { grid-template-columns: repeat(3, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>電脳オフィス / <b>マイページ</b></h1>
+    <nav>
+      <span class="conn" id="conn">接続中…</span>
+      <a href="/">オフィスを見る</a>
+      <a href="/me" id="switch" hidden>人を切り替え</a>
+    </nav>
+  </header>
+
+  <!-- 自分を選ぶ（/me） -->
+  <section class="card" id="picker" hidden>
+    <h2>あなたはどなたですか？</h2>
+    <div class="pick" id="pickList"></div>
+    <p class="hint">選んだページをブックマークしておくと、次からすぐ開けます。</p>
+  </section>
+
+  <!-- マイページ（/me/<id>） -->
+  <div id="mine" hidden>
+    <section class="card hero">
+      <div id="heroAvatar"></div>
+      <div>
+        <div class="seat" id="heroSeat"></div>
+        <div class="who" id="heroName"></div>
+        <div class="row">
+          <button class="presence" id="presence" aria-pressed="false">
+            <span class="knob" aria-hidden="true"></span><span id="presenceLabel">不在</span>
+          </button>
+        </div>
+        <p class="hint" id="resetHint"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>ひとりごと</h2>
+      <div class="now" id="now"></div>
+      <div class="presets" id="presets"></div>
+      <div class="inputrow">
+        <input id="text" type="text" placeholder="いまのひとこと" autocomplete="off" aria-label="ひとりごと">
+        <span class="count" id="count"></span>
+      </div>
+      <div class="sendrow">
+        <div>
+          <span class="hint" style="margin-right:8px">消えるまで</span>
+          <span class="seg" id="durations" role="group" aria-label="消えるまでの時間"></span>
+        </div>
+        <div class="actions">
+          <button class="btn" id="clear">消す</button>
+          <button class="btn primary" id="send">出す</button>
+        </div>
+      </div>
+      <p class="hint">StopWatch の吹き出しに見えるのは先頭5文字くらいです。不在のあいだは吹き出しは出ません。</p>
+    </section>
+
+    <section class="card">
+      <h2>キャラ</h2>
+      <div class="chars" id="chars"></div>
+      <p class="hint">キャラは1日1体ずつ増えていきます。「準備中」の子は完成すると選べるようになります。</p>
+    </section>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const myId = (location.pathname.match(/^\/me\/([\w-]+)/) || [])[1];
+let state = null;
+let characters = [];
+let duration = "2h";
+let queue = Promise.resolve();
+
+// ---------- /me：自分を選ぶ ----------
+if (!myId) {
+  let saved = null;
+  try { saved = localStorage.getItem("denno.me"); } catch {}
+  if (saved) location.replace(`/me/${saved}`);
+  $("picker").hidden = false;
+} else {
+  try { localStorage.setItem("denno.me", myId); } catch {}
+  $("mine").hidden = false;
+  $("switch").hidden = false;
+}
+$("switch").addEventListener("click", () => { try { localStorage.removeItem("denno.me"); } catch {} });
+
+function renderPicker() {
+  const list = $("pickList");
+  list.replaceChildren(...state.members.map((m) => {
+    const a = document.createElement("a");
+    a.href = `/me/${m.id}`;
+    const name = document.createElement("div");
+    name.innerHTML = `<small></small><span></span>`;
+    name.querySelector("small").textContent = m.seat;
+    name.querySelector("span").textContent = m.name;
+    a.append(Denno.avatar(m.character), name);
+    return a;
+  }));
+}
+
+// ---------- マイページ ----------
+function me() { return state.members.find((m) => m.id === myId); }
+
+function renderMine() {
+  const m = me();
+  if (!m) {
+    try { localStorage.removeItem("denno.me"); } catch {}
+    $("mine").hidden = true; $("picker").hidden = false; renderPicker(); return;
+  }
+  document.title = `${m.name}さんのマイページ｜電脳オフィス`;
+  $("heroName").textContent = `${m.name} さん`;
+  $("heroSeat").textContent = `席 ${m.seat}`;
+  $("heroAvatar").replaceChildren(Denno.avatar(m.character));
+  $("presence").setAttribute("aria-pressed", String(m.present));
+  $("presenceLabel").textContent = m.present ? "在席中" : "不在";
+  $("resetHint").textContent = `押し忘れても、毎晩 ${state.resetAt} に自動で不在に戻ります。`;
+
+  const now = $("now");
+  if (m.comment) {
+    const b = document.createElement("div");
+    b.className = "bubble";
+    b.innerHTML = "<small></small><span></span>";
+    b.querySelector("small").textContent = `${m.seat} ${m.name}`;
+    b.querySelector("span").textContent = m.comment.text;
+    const left = document.createElement("span");
+    left.className = "left";
+    left.textContent = `${Denno.remaining(m.comment.until)}で消えます` + (m.present ? "" : "（不在中は非表示）");
+    now.replaceChildren(b, left);
+  } else {
+    const e = document.createElement("span");
+    e.className = "empty";
+    e.textContent = "いまはひとりごとなし";
+    now.replaceChildren(e);
+  }
+  $("clear").disabled = !m.comment;
+
+  if (!$("presets").childElementCount) {
+    $("presets").replaceChildren(...state.presets.map((p) => {
+      const c = document.createElement("button");
+      c.className = "chip";
+      c.textContent = p;
+      c.addEventListener("click", () => { $("text").value = p; updateCount(); $("text").focus(); });
+      return c;
+    }));
+    $("durations").replaceChildren(...state.durations.map((d) => {
+      const b = document.createElement("button");
+      b.textContent = d.label;
+      b.dataset.id = d.id;
+      b.addEventListener("click", () => { duration = d.id; renderDurations(); });
+      return b;
+    }));
+    renderDurations();
+    updateCount();
+  }
+  renderChars();
+}
+
+function renderDurations() {
+  for (const b of $("durations").children) b.setAttribute("aria-pressed", String(b.dataset.id === duration));
+}
+
+function updateCount() {
+  const n = [...$("text").value.trim()].length;
+  const max = state ? state.commentMax : 20;
+  $("count").textContent = `${n}/${max}`;
+  $("count").classList.toggle("over", n > max);
+  $("send").disabled = n === 0 || n > max;
+}
+
+function renderChars() {
+  const m = me();
+  const usedBy = {};
+  for (const x of state.members) if (x.character && x.id !== myId) (usedBy[x.character.id] ||= []).push(x.name);
+  $("chars").replaceChildren(...characters.map((c) => {
+    const b = document.createElement("button");
+    b.className = "char";
+    b.disabled = !c.available;
+    b.setAttribute("aria-pressed", String(!!m.character && m.character.id === c.id));
+    b.title = c.feature;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `<div class="id"><span></span><span class="st"></span></div><div class="label"></div>`;
+    meta.querySelector(".id span").textContent = c.id;
+    meta.querySelector(".st").textContent = c.available ? "" : "準備中";
+    meta.querySelector(".label").textContent = c.label;
+    if (usedBy[c.id]) {
+      const u = document.createElement("div");
+      u.className = "used";
+      u.textContent = `${usedBy[c.id].join("・")}さんも使用中`;
+      meta.append(u);
+    }
+    b.append(Denno.avatar(c.available ? c : null), meta);
+    b.addEventListener("click", () => send({ character: c.id }, `${c.id} にしました`));
+    return b;
+  }));
+}
+
+// 続けて押されても順番に送る
+function send(body, okMsg) {
+  queue = queue.then(async () => {
+    try {
+      state = await Denno.patch(myId, body);
+      renderMine();
+      Denno.toast(okMsg);
+      return true;
+    } catch (e) {
+      Denno.toast(e.message, true);
+      return false;
+    }
+  });
+  return queue;
+}
+
+$("presence").addEventListener("click", () => {
+  const next = !me().present;
+  send({ present: next }, next ? "在席にしました" : "不在にしました");
+});
+$("text").addEventListener("input", updateCount);
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && !$("send").disabled) $("send").click(); });
+$("send").addEventListener("click", async () => {
+  const text = $("text").value.trim();
+  if (await send({ comment: { text, duration } }, "ひとりごとを出しました")) { $("text").value = ""; updateCount(); }
+});
+$("clear").addEventListener("click", () => send({ comment: null }, "ひとりごとを消しました"));
+
+async function loadCharacters() {
+  try { characters = await (await fetch("/api/characters")).json(); } catch {}
+  if (state && myId) renderChars();
+}
+
+// ---------- 起動 ----------
+loadCharacters();
+window.addEventListener("focus", loadCharacters);
+Denno.subscribe((s) => {
+  state = s;
+  if (myId) renderMine(); else renderPicker();
+}, $("conn"));
+setInterval(() => { if (state && myId) renderMine(); }, 30000); // 残り時間の表示を更新
+</script>
+</body>
+</html>

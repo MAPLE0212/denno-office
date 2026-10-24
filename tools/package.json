@@ -1,0 +1,8 @@
+{
+  "name": "denno-office-tools",
+  "private": true,
+  "description": "3D のキャラやオフィスをヘッドレス Chromium で焼くときに使う three.js（CDN の代わりにローカルから読む）",
+  "dependencies": {
+    "three": "0.160.0"
+  }
+}

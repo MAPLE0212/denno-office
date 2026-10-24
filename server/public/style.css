@@ -1,0 +1,111 @@
+/* 電脳オフィス 共通スタイル（3D オフィスと同じ配色） */
+:root {
+  --bg: #0a0e1a;
+  --panel: #121a2b;
+  --panel-2: #0e1525;
+  --fg: #e6ecff;
+  --muted: #8d9abb;
+  --line: #24304a;
+  --accent: #9db8ff;
+  --glow: #7fa2ff;
+  --ok: #7ee0b8;
+  --away: #5c6886;
+  --danger: #ff9db0;
+  --paper: #f6f8fc;
+  --ink: #181e32;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 20px 16px 48px; }
+
+header.top {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 20px;
+}
+header.top h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: .04em; color: var(--muted); }
+header.top h1 b { color: var(--fg); }
+header.top nav { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+header.top h1, header.top nav > * { white-space: nowrap; }
+@media (max-width: 480px) {
+  header.top { flex-wrap: wrap; gap: 6px 12px; }
+  header.top nav { gap: 12px; font-size: 12px; }
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.card h2 { font-size: 13px; font-weight: 700; color: var(--muted); margin: 0 0 12px; letter-spacing: .06em; }
+.hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+
+.btn {
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px;
+  padding: 9px 16px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+.btn.primary:hover { background: #b7cbff; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:focus-visible, .chip:focus-visible, .seg button:focus-visible, .char:focus-visible, input:focus-visible {
+  outline: 2px solid var(--glow); outline-offset: 2px;
+}
+
+.chip {
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--bg); font-weight: 700; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+  background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 10px; font-size: 13px;
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { background: var(--danger); }
+
+.conn { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.conn::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--away); }
+.conn.live::before { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+/* キャラの絵（画像がないときは影絵） */
+.avatar {
+  aspect-ratio: 1; border-radius: 12px; background: radial-gradient(circle at 50% 40%, #1b2744, #0b1124 70%);
+  display: grid; place-items: center; overflow: hidden; position: relative;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar .ph { font-family: var(--font-mono); font-size: 13px; color: var(--away); }
+
+/* 吹き出し（StopWatch の吹き出しに合わせた白い紙） */
+.bubble {
+  position: relative; background: var(--paper); color: var(--ink); border-radius: 10px;
+  padding: 6px 10px 7px; font-size: 14px; line-height: 1.35; display: inline-block; max-width: 100%;
+  word-break: break-all;
+}
+.bubble small { display: block; font-size: 11px; color: #6e768c; }
+.bubble::after {
+  content: ""; position: absolute; left: 18px; bottom: -6px; border: 6px solid transparent;
+  border-bottom: 0; border-top-color: var(--paper);
+}

@@ -1,0 +1,8 @@
+[
+  { "id": "sato",      "name": "佐藤", "seat": "A1" },
+  { "id": "suzuki",    "name": "鈴木", "seat": "A2" },
+  { "id": "takahashi", "name": "高橋", "seat": "A3" },
+  { "id": "tanaka",    "name": "田中", "seat": "B1" },
+  { "id": "ito",       "name": "伊藤", "seat": "B2" },
+  { "id": "watanabe",  "name": "渡辺", "seat": "B3" }
+]

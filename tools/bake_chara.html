@@ -1,0 +1,134 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bake_chara</title>
+<!-- bake_chara.py が開く撮影用ページ。島・家具・ライト・カメラ・グローは bake6.html と同じ（背景を一致させるため）。
+     キャラだけ、サーバの /charas.js（characters/ の完成キャラ）から ?c=cXX で選んだ1体を6席すべてに座らせる。 -->
+<div id="stage"></div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import makeCharas from "./_charas.js";
+
+const CID = new URLSearchParams(location.search).get("c");
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+document.getElementById("stage").append(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1124);
+const camera = new THREE.PerspectiveCamera(30, 1.6, 0.02, 30);
+
+scene.add(new THREE.HemisphereLight(0xe8ecff, 0x3a2f66, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(1.2, 2.5, 2);
+scene.add(key);
+
+// ---- materials（bake6.html / characters/cXX.html と同じ） ----
+const ramp = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 180, 180, 180, 255, 255, 255, 255, 255]), 3, 1);
+ramp.minFilter = ramp.magFilter = THREE.NearestFilter; ramp.needsUpdate = true;
+const toon = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap: ramp });
+const rampSoft = new THREE.DataTexture(new Uint8Array([200, 200, 200, 255, 235, 235, 235, 255, 255, 255, 255, 255]), 3, 1);
+rampSoft.minFilter = rampSoft.magFilter = THREE.NearestFilter; rampSoft.needsUpdate = true;
+const outlineUniforms = { thickness: { value: 0.005 } };
+function outlineMat(c, boost = 1.7) {
+  return new THREE.ShaderMaterial({
+    uniforms: { thickness: outlineUniforms.thickness, color: { value: new THREE.Color(c).multiplyScalar(boost) } },
+    vertexShader: `uniform float thickness; void main(){ vec3 p = position + normal * thickness; gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0); }`,
+    fragmentShader: `uniform vec3 color; void main(){ gl_FragColor = vec4(color,1.0); }`,
+    side: THREE.BackSide,
+  });
+}
+const charas = makeCharas({ THREE, toon, outlineMat, ramp, rampSoft, outlineUniforms });
+if (CID && !charas[CID]) throw new Error(`no character ${CID} (完成していないか cXX.html がない)`);
+
+// ---- island of 6 seats（bake6.html と同じ配置） ----
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshStandardMaterial({ color: 0x0d1430, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const grid = new THREE.GridHelper(10, 50, 0x4a6cff, 0x22337a);
+grid.position.y = 0.002; grid.material.transparent = true; grid.material.opacity = 0.5; scene.add(grid);
+const furn = new THREE.MeshStandardMaterial({ color: 0x18213d, roughness: 0.85 });
+const edge = new THREE.LineBasicMaterial({ color: new THREE.Color(0x9fc0ff).multiplyScalar(1.5) });
+function nbox(parent, w, h, d, x, y, z, ry = 0, mat = furn) {
+  const g = new THREE.BoxGeometry(w, h, d), m = new THREE.Mesh(g, mat);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edge));
+  m.position.set(x, y, z); m.rotation.y = ry; parent.add(m); return m;
+}
+const DESK_W = 0.8, DESK_H = 0.4, Z0 = 0.56;
+nbox(scene, DESK_W * 3, 0.1, 0.015, 0, DESK_H + 0.06, 0, 0, new THREE.MeshStandardMaterial({ color: 0x24305a, transparent: true, opacity: 0.6 }));
+
+const seats = [];
+for (let i = 0; i < 6; i++) {
+  const row = i < 3 ? 0 : 1, col = i % 3, side = row === 0 ? 1 : -1;
+  const g = new THREE.Group();
+  g.position.set((col - 1) * DESK_W, 0, side * Z0);
+  g.rotation.y = side === 1 ? Math.PI : 0;
+  scene.add(g);
+  nbox(g, DESK_W - 0.02, 0.025, 0.42, 0, DESK_H, 0.33);
+  nbox(g, 0.025, DESK_H, 0.38, -0.38, DESK_H / 2, 0.33);
+  nbox(g, 0.025, DESK_H, 0.38, 0.38, DESK_H / 2, 0.33);
+  nbox(g, 0.24, 0.012, 0.08, 0.02, DESK_H + 0.018, 0.2);
+  const mon = nbox(g, 0.3, 0.19, 0.018, -0.22, DESK_H + 0.14, 0.45, -0.35);
+  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.16), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4a74ff).multiplyScalar(1.2) }));
+  scr.position.z = -0.011; scr.rotation.y = Math.PI; mon.add(scr);
+  const chair = new THREE.Group(); g.add(chair);
+  [[0.24, 0.03, 0.22, 0, 0.233, -0.02], [0.24, 0.22, 0.025, 0, 0.36, -0.13]].forEach(a => {
+    const gg = new THREE.BoxGeometry(a[0], a[1], a[2]), m = new THREE.Mesh(gg, furn);
+    m.add(new THREE.LineSegments(new THREE.EdgesGeometry(gg), edge)); m.position.set(a[3], a[4], a[5]); chair.add(m);
+  });
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 8), furn); post.position.set(0, 0.11, -0.02); chair.add(post);
+  const J = CID ? charas[CID]() : null;
+  if (J) g.add(J.root);
+  seats.push({ g, J, chair });
+}
+
+// bake6.html と同じタイピングのポーズ（k / N 周期）。三つ編みなどが無いキャラもあるので有無を確かめる
+function bakePose(J, k, N) {
+  const r = (g, x = 0, y = 0, z = 0) => g && g.rotation.set(x, y, z);
+  const f = (k / N) * Math.PI * 2;
+  const breathe = Math.sin(f) * 0.006;
+  J.root.position.set(0, 0.0, -0.02); J.root.rotation.y = 0;
+  const swing = Math.sin(f) * 0.12;
+  r(J.thighL, -1.5, 0, 0.05); r(J.thighR, -1.5, 0, -0.05);
+  r(J.kneeL, 1.35 + swing); r(J.kneeR, 1.35 - swing);
+  r(J.chest, 0.06);
+  const a = Math.sin(f * 2) * 0.07, b = Math.sin(f * 2 + 1.9) * 0.07;
+  r(J.shL, -0.75, 0, 0.18); r(J.shR, -0.75, 0, -0.18);
+  r(J.elL, -0.95 + a, 0, -0.15); r(J.elR, -0.95 + b, 0, 0.15);
+  r(J.neck, 0.12); r(J.head, 0.1 + Math.sin(f) * 0.02, 0, Math.sin(f) * 0.03);
+  J.hips.position.y = 0.295 + breathe * 0.3;
+  if (J.chest) J.chest.scale.y = 1 + breathe;
+  if (J.braidL) J.braidL.rotation.set(Math.sin(f) * 0.05, 0, -0.05);
+  if (J.braidR) J.braidR.rotation.set(Math.sin(f + 1) * 0.05, 0, 0.05);
+}
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.9, 0.5, 0.97);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+renderer.setSize(466, 466, false); composer.setSize(466, 466);
+
+window.__bake = {
+  shot(o) {
+    camera.position.set(...o.cam); camera.aspect = 1; camera.fov = o.fov; camera.lookAt(new THREE.Vector3(...o.target)); camera.updateProjectionMatrix();
+    seats.forEach((s, i) => {
+      if (!s.J) return;
+      const vis = o.all || o.only === i;
+      s.J.root.visible = vis;
+      if (vis) { bakePose(s.J, o.k, o.N); (s.J.eyes || []).forEach(e => { e.scale.y = o.blink ? 0.003 : 0.0185; }); }
+    });
+    composer.render();
+    return renderer.domElement.toDataURL("image/png");
+  },
+};
+window.__ready = true;
+</script>

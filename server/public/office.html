@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>電脳オフィス</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+.wrap { max-width: 1100px; }
+.summary { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.summary .big { font-family: var(--font-mono); font-size: 28px; color: var(--fg); }
+.summary .sub { color: var(--muted); font-size: 13px; }
+
+.stage {
+  position: relative; width: 100%; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden;
+  background: #0b1124; border: 1px solid var(--line);
+}
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pin { position: absolute; left: 0; top: 0; will-change: transform; }
+.pin .bubble { transform: translate(-50%, -100%); white-space: nowrap; font-size: 13px; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
+.pin .bubble::after { left: 50%; margin-left: -6px; }
+.pin .name {
+  transform: translate(-50%, -100%); font-size: 11px; color: #cfe0ff; white-space: nowrap;
+  background: rgba(11, 17, 36, .7); border: 1px solid rgba(157, 184, 255, .35); border-radius: 999px; padding: 0 8px;
+}
+.pin .away {
+  transform: translate(-50%, -50%); font-size: 11px; color: var(--muted); white-space: nowrap;
+  background: rgba(20, 26, 44, .9); border: 1px solid var(--line); border-radius: 6px; padding: 1px 8px;
+}
+.loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+
+.below { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.below .btn { padding: 5px 12px; font-size: 12px; }
+
+/* マイクでガヤガヤ */
+.gaya-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.gaya-ctl .btn[aria-pressed="true"] { border-color: var(--glow); color: var(--fg); box-shadow: 0 0 8px rgba(127, 162, 255, .35); }
+.gaya-ctl .live { display: inline-flex; align-items: center; gap: 8px; }
+.gaya-ctl .live[hidden] { display: none; }
+.meter { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--ok), var(--glow) 60%, var(--danger)); }
+.gaya-ctl input[type="range"] { width: 72px; accent-color: var(--accent); }
+.gaya {
+  position: absolute; left: 0; top: 0;
+  filter: drop-shadow(0 0 4px rgba(127, 162, 255, .9)) drop-shadow(0 0 1px #0b1124);
+}
+.gaya svg { display: block; overflow: visible; }
+.gaya polyline { fill: none; stroke: #eaf1ff; stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
+
+@media (max-width: 600px) {
+  .stage { aspect-ratio: 4 / 5; }
+  .pin .bubble { font-size: 11px; padding: 4px 7px 5px; }
+  .pin .bubble small { font-size: 10px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>電脳オフィス / <b>島 1</b></h1>
+    <nav>
+      <span class="conn" id="conn">接続中…</span>
+      <a href="/me">マイページ</a>
+    </nav>
+  </header>
+
+  <div class="summary">
+    <span class="big" id="count">-/-</span><span class="sub">人 在席</span>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="loading" id="loading">オフィスを組み立て中…</div>
+    <div class="overlay" id="overlay"></div>
+  </div>
+
+  <div class="below">
+    <span>ドラッグで視点を回転、ホイールやピンチで拡大縮小。手前の列 A1〜A3 ／ 奥の列 B1〜B3</span>
+    <span class="gaya-ctl">
+      <button class="btn" id="gayaBtn" aria-pressed="false">マイクでガヤガヤ</button>
+      <button class="btn" id="gayaDemo" aria-pressed="false" title="マイクなしで、静か→にぎやか→静か をくり返して演出だけ見る">お試し</button>
+      <span class="live" id="gayaLive" hidden>
+        <span class="meter" title="マイクの音量"><i id="gayaMeter"></i></span>
+        <label id="gayaSensWrap" title="感度">感度 <input type="range" id="gayaSens" min="0" max="1" step="0.05" value="0.5"></label>
+      </span>
+    </span>
+    <span><span id="reset"></span>　<button class="btn" id="home">視点をもどす</button></span>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import makeCharas from "/charas.js";
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage"), overlay = $("overlay");
+
+// ---- renderer / scene（characters/cXX.html と同じ見た目） ----
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+stage.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1124);
+const camera = new THREE.PerspectiveCamera(30, 1.6, 0.02, 40);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = 0.6; controls.maxDistance = 9;
+controls.maxPolarAngle = Math.PI * 0.495;
+
+scene.add(new THREE.HemisphereLight(0xe8ecff, 0x3a2f66, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(1.2, 2.5, 2);
+scene.add(key);
+
+// ---- キャラ共通の材質 ----
+const ramp = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 180, 180, 180, 255, 255, 255, 255, 255]), 3, 1);
+ramp.minFilter = ramp.magFilter = THREE.NearestFilter; ramp.needsUpdate = true;
+const toon = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap: ramp });
+const rampSoft = new THREE.DataTexture(new Uint8Array([200, 200, 200, 255, 235, 235, 235, 255, 255, 255, 255, 255]), 3, 1);
+rampSoft.minFilter = rampSoft.magFilter = THREE.NearestFilter; rampSoft.needsUpdate = true;
+const outlineUniforms = { thickness: { value: 0.005 } };
+function outlineMat(c, boost = 1.7) {
+  return new THREE.ShaderMaterial({
+    uniforms: { thickness: outlineUniforms.thickness, color: { value: new THREE.Color(c).multiplyScalar(boost) } },
+    vertexShader: `uniform float thickness; void main(){ vec3 p = position + normal * thickness; gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0); }`,
+    fragmentShader: `uniform vec3 color; void main(){ gl_FragColor = vec4(color,1.0); }`,
+    side: THREE.BackSide,
+  });
+}
+const charas = makeCharas({ THREE, toon, outlineMat, ramp, rampSoft, outlineUniforms });
+const CHARA_IDS = Object.keys(charas);
+
+// ---- 床と家具 ----
+const floor = new THREE.Mesh(new THREE.CircleGeometry(9, 64), new THREE.MeshStandardMaterial({ color: 0x0d1430, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const grid = new THREE.GridHelper(18, 90, 0x4a6cff, 0x22337a);
+grid.position.y = 0.002; grid.material.transparent = true; grid.material.opacity = 0.5; scene.add(grid);
+
+const furn = new THREE.MeshStandardMaterial({ color: 0x18213d, roughness: 0.85 });
+const edge = new THREE.LineBasicMaterial({ color: new THREE.Color(0x9fc0ff).multiplyScalar(1.5) });
+function nbox(parent, w, h, d, x, y, z) {
+  const g = new THREE.BoxGeometry(w, h, d), m = new THREE.Mesh(g, furn);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edge));
+  m.position.set(x, y, z); parent.add(m); return m;
+}
+const DESK_H = 0.4, DESK_W = 0.8, ROW_DZ = 1.08;
+const screenOn = new THREE.Color(0x4a74ff).multiplyScalar(1.2), screenOff = new THREE.Color(0x1b2550);
+
+// 1席 = 椅子 + 机 + モニタ + キーボード（キャラは原点で +z を向き、机はその前）
+function makeSeat(parent) {
+  const g = new THREE.Group(); parent.add(g);
+  nbox(g, DESK_W, 0.025, 0.42, 0, DESK_H, 0.33);
+  nbox(g, 0.025, DESK_H, 0.38, -DESK_W / 2 + 0.02, DESK_H / 2, 0.33);
+  nbox(g, 0.025, DESK_H, 0.38, DESK_W / 2 - 0.02, DESK_H / 2, 0.33);
+  nbox(g, 0.24, 0.012, 0.08, 0.02, DESK_H + 0.018, 0.2);
+  const mon = nbox(g, 0.3, 0.19, 0.018, 0.0, DESK_H + 0.14, 0.47);
+  const screenMat = new THREE.MeshBasicMaterial({ color: screenOff });
+  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.16), screenMat);
+  scr.position.z = -0.011; scr.rotation.y = Math.PI; mon.add(scr);
+  [[0.24, 0.03, 0.22, 0, 0.233, -0.02], [0.24, 0.22, 0.025, 0, 0.36, -0.13]].forEach((a) => nbox(g, a[0], a[1], a[2], a[3], a[4], a[5]));
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 8), furn); post.position.set(0, 0.11, -0.02); g.add(post);
+  return screenMat;
+}
+
+// 島の仕切り
+const div = nbox(scene, DESK_W * 3, 0.1, 0.012, 0, DESK_H + 0.06, ROW_DZ / 2);
+div.material = new THREE.MeshStandardMaterial({ color: 0x223066, roughness: 0.6, transparent: true, opacity: 0.6 });
+
+// 席：奥の列 B（カメラ側を向く）と手前の列 A（カメラに背を向ける）。どちらも左から 1, 2, 3
+const seats = {};
+["B1", "B2", "B3", "A1", "A2", "A3"].forEach((code, i) => {
+  const front = code[0] === "A", col = Number(code[1]) - 1;
+  const g = new THREE.Group(); scene.add(g);
+  g.position.set((col - 1) * DESK_W, 0, front ? ROW_DZ : 0);
+  g.rotation.y = front ? Math.PI : 0;
+  const pin = document.createElement("div"); pin.className = "pin"; overlay.append(pin);
+  seats[code] = {
+    code, group: g, screenMat: makeSeat(g), pin, idx: i,
+    chara: null, charaId: null, phase: i * 1.37, blinkT: 1 + Math.random() * 3, idle: i % 3 === 1,
+    head: new THREE.Vector3(0, 0.98, -0.02), chair: new THREE.Vector3(0, 0.5, -0.06),
+  };
+});
+
+function disposeTree(o) {
+  o.traverse((n) => {
+    if (n.geometry) n.geometry.dispose();
+    if (n.material) (Array.isArray(n.material) ? n.material : [n.material]).forEach((m) => m.dispose());
+  });
+}
+
+// ---- サーバの状態を席に反映 ----
+function applyState(s) {
+  for (const m of s.members) {
+    const seat = seats[m.seat];
+    if (!seat) continue;
+    // キャラ未設定の人は、席ごとに決まった完成キャラで仮に表示する
+    const want = !m.present || !CHARA_IDS.length ? null
+      : (m.character && charas[m.character.id] ? m.character.id : CHARA_IDS[seat.idx % CHARA_IDS.length]);
+    if (want !== seat.charaId) {
+      if (seat.chara) { seat.group.remove(seat.chara.root); disposeTree(seat.chara.root); }
+      seat.chara = want ? charas[want]() : null;
+      if (seat.chara) { seat.chara.root.position.set(0, 0, -0.02); seat.group.add(seat.chara.root); }
+      seat.charaId = want;
+    }
+    seat.screenMat.color.copy(m.present ? screenOn : screenOff);
+
+    // 吹き出し・名前・不在タグ（HTML を 3D の位置に重ねる）
+    if (m.present && m.comment) {
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.innerHTML = "<small></small><span></span>";
+      b.querySelector("small").textContent = `${m.seat} ${m.name}`;
+      b.querySelector("span").textContent = m.comment.text;
+      seat.pin.replaceChildren(b);
+      seat.anchor = seat.head;
+    } else if (m.present) {
+      const n = document.createElement("div");
+      n.className = "name";
+      n.textContent = m.name;
+      seat.pin.replaceChildren(n);
+      seat.anchor = seat.head;
+    } else {
+      const t = document.createElement("div");
+      t.className = "away";
+      t.textContent = `${m.name} 不在`;
+      seat.pin.replaceChildren(t);
+      seat.anchor = seat.chair;
+    }
+  }
+  $("count").textContent = `${s.members.filter((m) => m.present).length}/${s.members.length}`;
+  $("reset").textContent = `毎晩 ${s.resetAt} に全員を不在に戻します`;
+}
+
+// ---- ポーズ（characters/cXX.html の座りポーズ。作業中とひと休みを席ごとに） ----
+function applyPose(P, T) {
+  const J = P.chara, t = T + P.phase, r = (g, x = 0, y = 0, z = 0) => g && g.rotation.set(x, y, z);
+  const breathe = Math.sin(t * 1.8) * 0.006;
+  const swing = Math.sin(t * 2.2) * 0.12;
+  r(J.thighL, -1.5, 0, 0.05); r(J.thighR, -1.5, 0, -0.05);
+  r(J.kneeL, 1.35 + swing); r(J.kneeR, 1.35 - swing);
+  r(J.chest, 0.06);
+  if (!P.idle) {
+    const a = Math.sin(t * 13) * 0.07, b = Math.sin(t * 13 + 1.9) * 0.07;
+    r(J.shL, -0.75, 0, 0.18); r(J.shR, -0.75, 0, -0.18);
+    r(J.elL, -0.95 + a, 0, -0.15); r(J.elR, -0.95 + b, 0, 0.15);
+    r(J.neck, 0.12); r(J.head, 0.1 + Math.sin(t * 0.8) * 0.02, 0, Math.sin(t * 0.6) * 0.03);
+  } else {
+    r(J.shL, -0.25, 0, -0.08); r(J.shR, -0.25, 0, 0.08);
+    r(J.elL, -0.9, 0, -0.2); r(J.elR, -0.9, 0, 0.2);
+    r(J.neck, 0.02); r(J.head, -0.02, Math.sin(t * 0.45) * 0.25, Math.sin(t * 0.8) * 0.06);
+  }
+  J.hips.position.y = 0.295 + breathe * 0.3;
+  if (J.chest) J.chest.scale.y = 1 + breathe;
+  if (J.braidL) J.braidL.rotation.set(Math.sin(t * 1.3) * 0.05, 0, -0.05);
+  if (J.braidR) J.braidR.rotation.set(Math.sin(t * 1.3 + 1) * 0.05, 0, 0.05);
+}
+
+// ---- カメラ：島の手前の角から見下ろす。縦長の画面では少し引く ----
+const TARGET = new THREE.Vector3(0, 0.45, ROW_DZ * 0.5);
+const HOME = new THREE.Vector3(1.5, 2.3, 4.0).sub(TARGET);
+function home() {
+  const aspect = camera.aspect || 1.6;
+  const k = aspect < 1.6 ? Math.pow(1.6 / aspect, 0.75) : 1;
+  controls.target.copy(TARGET);
+  camera.position.copy(TARGET).addScaledVector(HOME, k);
+  controls.update();
+}
+$("home").addEventListener("click", home);
+
+// ---- 描画 ----
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.9, 0.5, 0.97);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+let sized = false;
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); composer.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (!sized) { home(); sized = true; }
+}
+new ResizeObserver(resize).observe(stage);
+
+const v = new THREE.Vector3();
+function placePins() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  for (const seat of Object.values(seats)) {
+    if (!seat.anchor) continue;
+    v.copy(seat.anchor);
+    seat.group.localToWorld(v);
+    v.project(camera);
+    const visible = v.z < 1 && Math.abs(v.x) < 1.2 && Math.abs(v.y) < 1.2;
+    seat.pin.style.display = visible ? "" : "none";
+    seat.pin.style.transform = `translate(${((v.x + 1) / 2) * w}px, ${((1 - v.y) / 2) * h}px)`;
+    // 近い席の吹き出しを手前に（ガヤガヤの文字よりは常に上）
+    seat.pin.style.zIndex = String(1000 + Math.round((1 - v.z) * 1000));
+  }
+}
+
+// ---- マイクでガヤガヤ：まわりの話し声が大きいほど、キャラの頭の両横に漫画のギザギザが出てざわつく ----
+// 頭の横のギザギザ 1 本ぶんの点（高さ ±1 の単位）。上から下へ、内側と外側を行ったり来たりする
+function zigzagPoints(dir) {
+  const n = 5, pts = [];
+  for (let i = 0; i <= n; i++) {
+    const x = (i % 2 ? 1 : 0.12) * (0.8 + Math.random() * 0.4);
+    pts.push([dir * x, -1 + (2 * i) / n + (Math.random() - 0.5) * 0.2]);
+  }
+  return pts;
+}
+const gaya = { level: 0, stream: null, ctx: null, analyser: null, buf: null, warm: 0, mins: [], secMin: Infinity, secT: 0, demo: false, demoAt: 0 };
+
+async function gayaStart() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  Object.assign(gaya, { stream, ctx, analyser, buf: new Float32Array(analyser.fftSize), warm: 0.5, mins: [], secMin: Infinity, secT: 0 });
+}
+function gayaStop() {
+  gaya.stream.getTracks().forEach((tr) => tr.stop());
+  gaya.ctx.close();
+  Object.assign(gaya, { stream: null, ctx: null, analyser: null });
+}
+
+// 声の大きさ 0〜1。直近 20 秒でいちばん静かだった音を部屋のノイズとみなし、それより大きい分だけ数える
+function gayaLevel(dt) {
+  let target = 0;
+  if (gaya.demo) {
+    // お試し：約 9 秒で 静か→にぎやか→静か。しゃべりっぽく小刻みに揺らす
+    const T = (performance.now() - gaya.demoAt) / 1000; // 描画が遅い PC でも同じ速さで進むよう実時間で
+    target = (0.5 - 0.5 * Math.cos(T * 0.7)) * (0.75 + 0.25 * Math.abs(Math.sin(T * 7.3) * Math.sin(T * 3.1)));
+  }
+  // 起動直後 0.5 秒はマイクが落ち着かないので数えない
+  else if (gaya.analyser && (gaya.warm -= dt) < 0) {
+    gaya.analyser.getFloatTimeDomainData(gaya.buf);
+    let sum = 0;
+    for (const x of gaya.buf) sum += x * x;
+    // 起動直後などの完全な無音（0 が並ぶだけ）はノイズの基準にしない
+    if (sum > 1e-9) {
+      const db = 10 * Math.log10(sum / gaya.buf.length);
+      gaya.secMin = Math.min(gaya.secMin, db);
+      if ((gaya.secT += dt) >= 1) {
+        gaya.mins.push(gaya.secMin);
+        if (gaya.mins.length > 20) gaya.mins.shift();
+        gaya.secMin = Infinity; gaya.secT = 0;
+      }
+      const floorDb = Math.min(db, gaya.secMin, ...gaya.mins);
+      const range = 36 - Number($("gayaSens").value) * 26; // 感度が高いほど小さな声で満タン
+      target = Math.min(1, Math.max(0, (db - floorDb - 4) / range));
+    }
+  }
+  // すっと上がって、ゆっくり静まる
+  gaya.level += (target - gaya.level) * Math.min(1, dt * (target > gaya.level ? 12 : 2.5));
+  return gaya.level;
+}
+
+// 席ごとに左右 1 本ずつ
+function gayaMarks(seat) {
+  if (!seat.gaya) seat.gaya = [-1, 1].map((dir) => {
+    const el = document.createElement("div");
+    el.className = "gaya";
+    el.innerHTML = '<svg width="1" height="1"><polyline/></svg>';
+    overlay.append(el);
+    return { dir, el, line: el.querySelector("polyline"), pts: null, t: 0 };
+  });
+  return seat.gaya;
+}
+
+// 頭の中心から ななめ上（横へ・上へ）/ ギザギザの高さの半分（ワールド単位）/ 外へ倒す角度
+const GAYA_SIDE = 0.30, GAYA_RISE = 0.14, GAYA_HALF = 0.10, GAYA_TILT = 135;
+const headC = new THREE.Vector3(), camRight = new THREE.Vector3(), camUp = new THREE.Vector3();
+const pC = new THREE.Vector3(), pU = new THREE.Vector3();
+function gayaUpdate(dt) {
+  const level = gayaLevel(dt);
+  if (gaya.analyser || gaya.demo) $("gayaMeter").style.width = `${level * 100}%`;
+  // 0.12 を超えると出はじめ、0.4 でくっきり
+  const show = Math.min(1, Math.max(0, (level - 0.12) / 0.28));
+  const w = stage.clientWidth, h = stage.clientHeight;
+  const px = (p) => [((p.x + 1) / 2) * w, ((1 - p.y) / 2) * h];
+  camRight.setFromMatrixColumn(camera.matrixWorld, 0);
+  camUp.setFromMatrixColumn(camera.matrixWorld, 1);
+  for (const seat of Object.values(seats)) {
+    if (!seat.chara && !seat.gaya) continue;
+    const marks = gayaMarks(seat);
+    const J = seat.chara;
+    if (!J || !J.head || show <= 0) { marks.forEach((m) => { m.el.style.display = "none"; }); continue; }
+    // 頭の中心（少し上）を画面に写し、そこから画面で見て ななめ上に置く
+    J.head.getWorldPosition(headC).addScaledVector(camUp, 0.05);
+    pC.copy(headC).project(camera);
+    pU.copy(headC).addScaledVector(camUp, GAYA_HALF).project(camera);
+    const [cx, cy] = px(pC), [ux, uy] = px(pU);
+    const size = Math.hypot(ux - cx, uy - cy) * (0.85 + level * 0.3);
+    for (const m of marks) {
+      v.copy(headC).addScaledVector(camRight, m.dir * GAYA_SIDE).addScaledVector(camUp, GAYA_RISE).project(camera);
+      if (v.z >= 1) { m.el.style.display = "none"; continue; }
+      // ときどき形を描き直して、ガヤガヤ震わせる（うるさいほど速く）
+      if ((m.t -= dt) <= 0 || !m.pts) { m.pts = zigzagPoints(m.dir); m.t = 0.22 - level * 0.12 + Math.random() * 0.06; }
+      m.line.setAttribute("points", m.pts.map(([x, y]) => `${(x * size).toFixed(1)},${(y * size).toFixed(1)}`).join(" "));
+      const [x, y] = px(v);
+      m.el.style.display = "";
+      m.el.style.opacity = String(show);
+      m.el.style.zIndex = String(Math.round((1 - v.z) * 1000));
+      m.el.style.transform = `translate(${x}px, ${y}px) rotate(${m.dir * GAYA_TILT}deg)`;
+    }
+  }
+  return level;
+}
+
+function gayaSync() {
+  const mic = !!gaya.stream, btn = $("gayaBtn"), demo = $("gayaDemo");
+  btn.setAttribute("aria-pressed", String(mic));
+  btn.textContent = mic ? "ガヤガヤ停止" : "マイクでガヤガヤ";
+  demo.setAttribute("aria-pressed", String(gaya.demo));
+  demo.textContent = gaya.demo ? "お試し停止" : "お試し";
+  $("gayaLive").hidden = !mic && !gaya.demo;
+  $("gayaSensWrap").hidden = !mic; // 感度はマイクのときだけ
+}
+
+$("gayaDemo").addEventListener("click", () => {
+  if (gaya.stream) gayaStop();
+  gaya.demo = !gaya.demo;
+  gaya.demoAt = performance.now();
+  gayaSync();
+});
+
+$("gayaBtn").addEventListener("click", async () => {
+  const btn = $("gayaBtn");
+  gaya.demo = false;
+  if (gaya.stream) gayaStop();
+  else if (!navigator.mediaDevices?.getUserMedia) {
+    Denno.toast("マイクは https か localhost で開いたときだけ使えます（音なしで見るなら「お試し」）", true);
+  } else {
+    btn.disabled = true;
+    try { await gayaStart(); } catch { Denno.toast("マイクを使えませんでした（ブラウザの許可を確認してね）", true); }
+    btn.disabled = false;
+  }
+  gayaSync();
+});
+
+const clock = new THREE.Clock();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  const noise = gayaUpdate(dt);
+  for (const seat of Object.values(seats)) {
+    if (!seat.chara) continue;
+    applyPose(seat, t);
+    // ざわざわ：うなずいたり、となりを向いたり、体をゆらしたり
+    if (noise > 0.02) {
+      const J = seat.chara, tt = t * 9 + seat.phase * 3;
+      if (J.head) { J.head.rotation.x += Math.sin(tt) * 0.12 * noise; J.head.rotation.y += Math.sin(tt * 0.37) * 0.3 * noise; }
+      J.hips.position.y += Math.abs(Math.sin(tt * 0.5)) * 0.012 * noise;
+    }
+    seat.blinkT -= dt;
+    const closed = seat.blinkT < 0.12;
+    (seat.chara.eyes || []).forEach((e) => { e.scale.y = closed ? 0.003 : 0.0185; });
+    if (seat.blinkT < 0) seat.blinkT = 2 + Math.random() * 3;
+  }
+  controls.update();
+  composer.render();
+  placePins();
+  requestAnimationFrame(frame);
+}
+
+resize();
+Denno.subscribe((s) => { applyState(s); $("loading").style.display = "none"; }, $("conn"));
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
