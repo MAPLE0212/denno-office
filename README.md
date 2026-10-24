@@ -46,7 +46,7 @@ node server/server.js
 
 ### キャラを追加する
 
-キャラは作成者ごとのフォルダ `characters/<作成者>/` に入っていて、マイページでは作成者ごとのタブになります。雛形 `characters/_template.html` をコピーして自分のフォルダで作り、一覧（`characters.json`）に足すと、オフィスとマイページに出てきます。作風は自由で、オフィスで動くための決まりだけ守れば大丈夫です。作り方・チェックのしかた・Pull Request の送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+キャラは作成者ごとのフォルダ `characters/<作成者>/` に入っていて、マイページでは作成者ごとのタブになります。雛形 `characters/_template.html` をコピーして自分のフォルダで作り、一覧（`characters.json`）に足すと、オフィスとマイページに出てきます。作風は自由で、オフィスで動くための決まりだけ守れば大丈夫です。作り方・チェックのしかた・Pull Request の送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。コードを書かずに Claude Code に話しかけて作る方法は [docs/claude-code.md](docs/claude-code.md) にあります。
 
 公開しないで自分のオフィスだけで使うキャラは `characters/local/`（git に入りません）に置きます。
 

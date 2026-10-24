@@ -11,10 +11,13 @@ characters/
     characters.json       この作成者のキャラ一覧
     c01.html              キャラ本体
     c01_front.png         マイページ用の写真（任意）
+    STYLE.md              この作成者の作風メモ（任意。Claude Code はキャラを作る前に読む）
   local/                  自分のオフィスだけで使うキャラ（git に入らない）
 ```
 
 **作風は自由です。** 髪型・服・小物・色、どう作ってもかまいません。守ってほしいのは、下の「オフィスで動くための決まり」だけです。
+
+コードを書かずに、[Claude Code](https://claude.com/claude-code) に話しかけて作ることもできます。手順は [docs/claude-code.md](docs/claude-code.md) を見てください。
 
 ## 1. 自分のフォルダを作って、雛形をコピーする
 
@@ -49,7 +52,7 @@ cp characters/_template.html characters/alice/cat-ears.html
 
 ## 3. 見た目を作る
 
-`cat-ears.html` をブラウザで開き、見ながら書き換えます。サーバが切り出すのは **`const C = {` から `// ---- set:` の手前まで** なので、この範囲の中で作ります。
+`cat-ears.html` をブラウザで開き、見ながら書き換えます（ファイルを直接開いてうまく表示されないときは、リポジトリ直下で `python3 -m http.server 8800` を動かして `http://localhost:8800/characters/alice/cat-ears.html` を開きます）。サーバが切り出すのは **`const C = {` から `// ---- set:` の手前まで** なので、この範囲の中で作ります。
 
 | 場所 | 中身 |
 |---|---|

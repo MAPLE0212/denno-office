@@ -110,6 +110,7 @@ function checkHtml(id, file) {
   for (const u of new Set(outside.match(/https?:\/\/[^\s"'`)]+/g) || [])) {
     if (!/^https:\/\/(cdn\.jsdelivr\.net\/npm\/three@0\.160\.0\/|fonts\.googleapis\.com\/)/.test(u)) errors.push(`読み込んでよいのは three.js 0.160.0 と Google Fonts だけ: ${u}`);
   }
+  if (!/<meta\s+charset=["']?utf-8/i.test(src.slice(0, 1024))) warnings.push(`先頭に <meta charset="utf-8"> がない（ブラウザで開いたとき日本語が文字化けすることがある）`);
   if (errors.length) return report(id, errors, warnings); // 危ないかもしれないものは動かさない
 
   // 動かしてみる（vm の中で。グローバルには THREE と材質しか置かない）
@@ -201,9 +202,9 @@ function checkAuthor(dir) {
   }
   for (const f of fs.readdirSync(dir)) {
     const full = path.join(dir, f);
-    if (f === "characters.json" || f.startsWith(".")) continue;
+    if (f === "characters.json" || f === "STYLE.md" || f.startsWith(".")) continue;
     const m = f.match(/^(.+?)(_front\.png|\.html)$/);
-    if (!m) warnings.push(`${f}: キャラのフォルダに置くのは characters.json と <id>.html、<id>_front.png だけ`);
+    if (!m) warnings.push(`${f}: キャラのフォルダに置くのは characters.json、STYLE.md、<id>.html、<id>_front.png だけ`);
     else if (!seen.has(m[1])) warnings.push(`${f}: characters.json に "${m[1]}" がない（一覧に足さないとオフィスに出ない）`);
     else if (fs.statSync(full).size > 2 * 1024 * 1024) warnings.push(`${f}: 2MB より大きい`);
   }
