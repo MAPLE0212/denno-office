@@ -1,6 +1,6 @@
 """Render a character page headlessly and save front / seated screenshots.
-usage: python3 render_chara.py ../characters/cXX.html out/cXX   → out/cXX_{seated,front,face}.png
-  (cXX_front.png を characters/ に置くと、マイページのキャラ選びに出る)
+usage: python3 render_chara.py ../characters/<作成者>/<id>.html out/<id>   → out/<id>_{seated,front,face}.png
+  (<id>_front.png を characters/<作成者>/ に置くと、マイページのキャラ選びに出る)
 needs: npm install (tools/), pip install -r requirements.txt, playwright install chromium
 """
 import sys, os, re, time, threading, http.server, functools

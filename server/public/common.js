@@ -52,7 +52,7 @@ const Denno = (() => {
     } else {
       const ph = document.createElement("span");
       ph.className = "ph";
-      ph.textContent = character ? character.id : "?";
+      ph.textContent = character ? character.id.split("/").pop() : "?";
       box.append(ph);
     }
     return box;

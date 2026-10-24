@@ -2,7 +2,7 @@
 <meta charset="utf-8">
 <title>bake_chara</title>
 <!-- bake_chara.py が開く撮影用ページ。島・家具・ライト・カメラ・グローは bake6.html と同じ（背景を一致させるため）。
-     キャラだけ、サーバの /charas.js（characters/ の完成キャラ）から ?c=cXX で選んだ1体を6席すべてに座らせる。 -->
+     キャラだけ、サーバの /charas.js（characters/ の完成キャラ）から ?c=<作成者>/<id> で選んだ1体を6席すべてに座らせる。 -->
 <div id="stage"></div>
 <script type="importmap">
 { "imports": {
@@ -32,7 +32,7 @@ const key = new THREE.DirectionalLight(0xffffff, 1.6);
 key.position.set(1.2, 2.5, 2);
 scene.add(key);
 
-// ---- materials（bake6.html / characters/cXX.html と同じ） ----
+// ---- materials（bake6.html / characters/<作成者>/<id>.html と同じ） ----
 const ramp = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 180, 180, 180, 255, 255, 255, 255, 255]), 3, 1);
 ramp.minFilter = ramp.magFilter = THREE.NearestFilter; ramp.needsUpdate = true;
 const toon = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap: ramp });
@@ -48,7 +48,7 @@ function outlineMat(c, boost = 1.7) {
   });
 }
 const charas = makeCharas({ THREE, toon, outlineMat, ramp, rampSoft, outlineUniforms });
-if (CID && !charas[CID]) throw new Error(`no character ${CID} (完成していないか cXX.html がない)`);
+if (CID && !charas[CID]) throw new Error(`no character ${CID} (完成していないか <id>.html がない)`);
 
 // ---- island of 6 seats（bake6.html と同じ配置） ----
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshStandardMaterial({ color: 0x0d1430, roughness: 1 }));

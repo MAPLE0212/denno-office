@@ -1,0 +1,70 @@
+# キャラのチェック：Pull Request でキャラが変わったら、オフィスで動くかを確かめて、変わったキャラの写真を撮る
+# （写真は Actions の実行結果の Artifacts「character-shots」からダウンロードできる）
+name: キャラのチェック
+
+on:
+  pull_request:
+    paths:
+      - "characters/**"
+      - "tools/check_chara.mjs"
+      - "tools/render_chara.py"
+      - ".github/workflows/characters.yml"
+  push:
+    branches: [main]
+    paths:
+      - "characters/**"
+      - "tools/check_chara.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: three.js を入れる
+        run: npm install
+        working-directory: tools
+      - name: キャラをチェックする
+        run: node tools/check_chara.mjs
+
+  shots:
+    if: github.event_name == 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 撮影の道具を入れる
+        run: |
+          (cd tools && npm install)
+          pip install -r tools/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: 変わったキャラを撮る
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p shots
+          git diff --name-only --diff-filter=AM "origin/${BASE_REF}...HEAD" -- 'characters/*/*.html' > changed.txt
+          cat changed.txt
+          while IFS= read -r f; do
+            author="$(basename "$(dirname "$f")")"
+            name="$(basename "$f" .html)"
+            python tools/render_chara.py "$f" "shots/${author}_${name}"
+          done < changed.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: character-shots
+          path: shots/
+          if-no-files-found: ignore

@@ -41,6 +41,15 @@
 .sendrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 12px; }
 .sendrow .actions { display: flex; gap: 8px; }
 
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.tabs button {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--fg); border-radius: 999px;
+  padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer; transition: border-color .15s;
+}
+.tabs button:hover { border-color: var(--accent); }
+.tabs button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+.tabs button:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+.tabs .n { font-family: var(--font-mono); font-size: 11px; opacity: .7; margin-left: 4px; }
 .chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
 .char {
   border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 6px 6px 8px;
@@ -128,8 +137,9 @@
 
     <section class="card">
       <h2>キャラ</h2>
-      <div class="chars" id="chars"></div>
-      <p class="hint">キャラは1日1体ずつ増えていきます。「準備中」の子は完成すると選べるようになります。</p>
+      <div class="tabs" id="authorTabs" role="tablist" aria-label="作成者"></div>
+      <div class="chars" id="chars" role="tabpanel"></div>
+      <p class="hint">作成者ごとに並んでいます。「準備中」の子は完成すると選べるようになります。</p>
     </section>
   </div>
 </div>
@@ -141,6 +151,7 @@ const myId = (location.pathname.match(/^\/me\/([\w-]+)/) || [])[1];
 let state = null;
 let characters = [];
 let duration = "2h";
+let author = null; // いま開いている作成者のタブ
 let queue = Promise.resolve();
 
 // ---------- /me：自分を選ぶ ----------
@@ -239,11 +250,36 @@ function updateCount() {
   $("send").disabled = n === 0 || n > max;
 }
 
+// 作成者ごとのタブ。最初は自分のキャラの作成者を開く
+function renderAuthorTabs() {
+  const m = me();
+  const authors = [];
+  for (const c of characters) if (!authors.some((a) => a.id === c.author)) authors.push({ id: c.author, name: c.authorName });
+  if (!authors.some((a) => a.id === author)) {
+    const mine = m.character && characters.find((c) => c.id === m.character.id);
+    author = mine ? mine.author : (authors[0] && authors[0].id);
+  }
+  $("authorTabs").hidden = authors.length < 2;
+  $("authorTabs").replaceChildren(...authors.map((a) => {
+    const b = document.createElement("button");
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(a.id === author));
+    b.textContent = a.name;
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = characters.filter((c) => c.author === a.id).length;
+    b.append(n);
+    b.addEventListener("click", () => { author = a.id; renderChars(); });
+    return b;
+  }));
+}
+
 function renderChars() {
   const m = me();
+  renderAuthorTabs();
   const usedBy = {};
   for (const x of state.members) if (x.character && x.id !== myId) (usedBy[x.character.id] ||= []).push(x.name);
-  $("chars").replaceChildren(...characters.map((c) => {
+  $("chars").replaceChildren(...characters.filter((c) => c.author === author).map((c) => {
     const b = document.createElement("button");
     b.className = "char";
     b.disabled = !c.available;
@@ -252,7 +288,7 @@ function renderChars() {
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.innerHTML = `<div class="id"><span></span><span class="st"></span></div><div class="label"></div>`;
-    meta.querySelector(".id span").textContent = c.id;
+    meta.querySelector(".id span").textContent = c.name;
     meta.querySelector(".st").textContent = c.available ? "" : "準備中";
     meta.querySelector(".label").textContent = c.label;
     if (usedBy[c.id]) {
@@ -262,7 +298,7 @@ function renderChars() {
       meta.append(u);
     }
     b.append(Denno.avatar(c.available ? c : null), meta);
-    b.addEventListener("click", () => send({ character: c.id }, `${c.id} にしました`));
+    b.addEventListener("click", () => send({ character: c.id }, `${c.label} にしました`));
     return b;
   }));
 }

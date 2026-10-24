@@ -12,8 +12,8 @@
 //   /me/<id>   マイページ（在席・ひとりごと・キャラ）
 // API
 //   GET   /api/state            全員の状態
-//   GET   /api/characters       キャラ一覧（characters/characters.json から）
-//   PATCH /api/members/<id>     { present?, comment?: {text, duration} | null, character?: "c01" | null }
+//   GET   /api/characters       キャラ一覧（characters/<作成者>/characters.json から）
+//   PATCH /api/members/<id>     { present?, comment?: {text, duration} | null, character?: "maple/c01" | null }
 //   GET   /api/events           状態が変わるたびに "state" を送る（Server-Sent Events）
 //   GET   /api/device           StopWatch 用の軽い形式（1行1席のタブ区切り）
 const http = require("http");
@@ -41,28 +41,62 @@ const COMMENT_MAX = 20;
 
 // ---------- キャラ一覧 ----------
 
-// characters.json（[{ id: "c01", feature: "紺髪おさげ、…", label?, wip? }]）を読む。ファイルが更新されても毎回読み直す。
+// キャラは作成者ごとのフォルダ characters/<作成者>/ にある（マイページでは作成者ごとのタブになる）。
+//   characters/<作成者>/characters.json  { author: "表示名", characters: [{ id: "c01", feature: "紺髪おさげ、…", label?, wip? }] }
+//   characters/<作成者>/<id>.html, <id>_front.png
+// キャラの ID は "<作成者>/<id>"（例 "maple/c01"）。characters/local/ は git に入らない自分用のフォルダで、タブの先頭に出す。
+// CHARACTER_AUTHORS=maple,local のように書くと、その作成者のキャラだけを使う。
+const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const ID_RE = /^([a-z0-9][a-z0-9_-]{0,31})\/([a-z0-9][a-z0-9_-]{0,31})$/;
+const AUTHORS_ALLOWED = (process.env.CHARACTER_AUTHORS || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+function charaFile(id, suffix) {
+  const [, author, name] = id.match(ID_RE);
+  return path.join(CHARACTERS_DIR, author, `${name}${suffix}`);
+}
+
+function authorDirs() {
+  let dirs = [];
+  try { dirs = fs.readdirSync(CHARACTERS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch {}
+  dirs = dirs.filter((d) => NAME_RE.test(d) && (!AUTHORS_ALLOWED.length || AUTHORS_ALLOWED.includes(d))).sort();
+  return [...dirs.filter((d) => d === "local"), ...dirs.filter((d) => d !== "local")];
+}
+
+// 全員分の characters.json を読む。ファイルが更新されても毎回読み直す。
 function loadCharacters() {
-  let entries = [];
-  try { entries = JSON.parse(fs.readFileSync(path.join(CHARACTERS_DIR, "characters.json"), "utf8")); } catch { return []; }
   const list = [];
-  for (const e of entries) {
-    if (!e || !/^c\d{2}$/.test(e.id)) continue;
-    const feature = String(e.feature || "");
-    const hasImage = fs.existsSync(path.join(CHARACTERS_DIR, `${e.id}_front.png`));
-    list.push({
-      id: e.id,
-      label: e.label || feature.split("、")[0] || e.id,
-      feature,
-      status: e.wip ? "制作中" : "完成",
-      available: !e.wip,
-      image: hasImage ? `/img/chars/${e.id}.png` : null,
-    });
+  for (const author of authorDirs()) {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(path.join(CHARACTERS_DIR, author, "characters.json"), "utf8")); } catch { continue; }
+    const authorName = String(doc.author || (author === "local" ? "自分用" : author));
+    for (const e of Array.isArray(doc.characters) ? doc.characters : []) {
+      if (!e || !NAME_RE.test(e.id)) continue;
+      const id = `${author}/${e.id}`;
+      const feature = String(e.feature || "");
+      list.push({
+        id,
+        name: e.id,
+        author,
+        authorName,
+        label: e.label || feature.split("、")[0] || e.id,
+        feature,
+        status: e.wip ? "制作中" : "完成",
+        available: !e.wip,
+        image: fs.existsSync(charaFile(id, "_front.png")) ? `/img/chars/${id}.png` : null,
+      });
+    }
   }
   return list;
 }
 
-// 3D オフィス用：完成したキャラの cXX.html から、キャラを組み立てる部分（const C = { 〜 // ---- set:）を
+// 作成者フォルダにする前の ID（"c01"）を、同じ名前のキャラの新しい ID（"maple/c01"）に直す
+function migrateCharacterId(cid) {
+  if (!cid || cid.includes("/")) return cid;
+  const c = loadCharacters().find((x) => x.name === cid);
+  return c ? c.id : null;
+}
+
+// 3D オフィス用：完成したキャラの <id>.html から、キャラを組み立てる部分（const C = { 〜 // ---- set:）を
 // 切り出して1つの ES モジュールにする。
 // 共通の材質（toon・輪郭など）は呼び出し側から渡す。
 function charasModule() {
@@ -70,13 +104,13 @@ function charasModule() {
   for (const c of loadCharacters()) {
     if (!c.available) continue;
     let src;
-    try { src = fs.readFileSync(path.join(CHARACTERS_DIR, `${c.id}.html`), "utf8"); } catch { continue; }
+    try { src = fs.readFileSync(charaFile(c.id, ".html"), "utf8"); } catch { continue; }
     const a = src.indexOf("const C = {"), b = src.indexOf("// ---- set:");
     if (a < 0 || b < a) continue;
     parts.push(`charas[${JSON.stringify(c.id)}] = () => {\n${src.slice(a, b)}\nreturn makeChara();\n};`);
   }
   return [
-    "// characters/cXX.html から server.js が自動で組み立てたキャラ一覧",
+    "// characters/<作成者>/<id>.html から server.js が自動で組み立てたキャラ一覧",
     "export default function makeCharas({ THREE, toon, outlineMat, ramp, rampSoft, outlineUniforms }) {",
     "const charas = {};",
     ...parts,
@@ -91,10 +125,10 @@ const SPRITES_DIR = path.join(__dirname, "sprites");
 const TOOLS_DIR = path.join(__dirname, "..", "tools");
 const OFFICE_SEATS = ["B1", "B2", "B3", "A1", "A2", "A3"]; // 3D オフィスで仮キャラを決める並び
 
-// 3D に出せる完成キャラ（cXX.html があるもの）。characters.json の順
+// 3D に出せる完成キャラ（<id>.html があるもの）。タブの順、その中は characters.json の順
 function chara3dIds() {
   return loadCharacters()
-    .filter((c) => c.available && fs.existsSync(path.join(CHARACTERS_DIR, `${c.id}.html`)))
+    .filter((c) => c.available && fs.existsSync(charaFile(c.id, ".html")))
     .map((c) => c.id);
 }
 
@@ -110,14 +144,14 @@ function spriteVersion(cid) {
   try { return JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, cid, "meta.json"), "utf8")).bakedAt || 0; } catch { return 0; }
 }
 
-// まだ焼いていない（または cXX.html が焼いた後に直された）完成キャラを焼く。tools/.venv が無ければ何もしない
+// まだ焼いていない（または <id>.html が焼いた後に直された）完成キャラを焼く。tools/.venv が無ければ何もしない
 let baking = false;
 function bakeMissing() {
   const py = path.join(TOOLS_DIR, ".venv", "bin", "python");
   if (baking || !fs.existsSync(py)) return;
   const todo = chara3dIds().filter((cid) => {
     const v = spriteVersion(cid);
-    const edited = fs.statSync(path.join(CHARACTERS_DIR, `${cid}.html`)).mtimeMs / 1000;
+    const edited = fs.statSync(charaFile(cid, ".html")).mtimeMs / 1000;
     return !v || edited > v;
   });
   if (!todo.length) return;
@@ -144,7 +178,10 @@ function loadState() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); } catch {}
   s.members = s.members || {};
-  for (const m of MEMBERS) s.members[m.id] = { ...freshMember(), ...s.members[m.id] };
+  for (const m of MEMBERS) {
+    s.members[m.id] = { ...freshMember(), ...s.members[m.id] };
+    s.members[m.id].character = migrateCharacterId(s.members[m.id].character);
+  }
   if (!s.lastResetAt) s.lastResetAt = lastResetBoundary(Date.now());
   return s;
 }
@@ -350,11 +387,11 @@ const server = http.createServer(async (req, res) => {
     return res.end(charasModule());
   }
 
-  const sp = p.match(/^\/sprites\/(c\d{2})\/([AB][1-3])\.bin$/);
-  if (sp) return sendFile(res, path.join(SPRITES_DIR, sp[1], `${sp[2]}.bin`));
+  const sp = p.match(/^\/sprites\/([a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*)\/([AB][1-3])\.bin$/);
+  if (sp && ID_RE.test(sp[1])) return sendFile(res, path.join(SPRITES_DIR, sp[1], `${sp[2]}.bin`));
 
-  const im = p.match(/^\/img\/chars\/(c\d{2})\.png$/);
-  if (im) return sendFile(res, path.join(CHARACTERS_DIR, `${im[1]}_front.png`));
+  const im = p.match(/^\/img\/chars\/(.+)\.png$/);
+  if (im && ID_RE.test(im[1])) return sendFile(res, charaFile(im[1], "_front.png"));
 
   if (p === "/") return sendFile(res, path.join(PUBLIC_DIR, "office.html"));
   if (p === "/me" || /^\/me\/[\w-]+$/.test(p)) return sendFile(res, path.join(PUBLIC_DIR, "me.html"));

@@ -2,6 +2,9 @@
 firmware/denno_config.h
 server/members.json
 
+# 自分のオフィスだけで使うキャラ（公開しない）
+characters/local/
+
 # 自分用のキャラ制作メモと参考画像（git には入れない）
 PROGRESS.md
 reference.png

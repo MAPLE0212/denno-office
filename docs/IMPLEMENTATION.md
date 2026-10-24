@@ -175,22 +175,22 @@ python3 pack6.py          # ../firmware/office_art.h と bake6_out/composite_pre
 
 （マイページで選んだキャラを実機に出すだけなら、サーバと `bake_chara.py` が自動でやるのでこの手順は不要。ここはサーバにつながないときの既定の絵を変えたい場合）
 
-ミニキャラは `characters/cXX.html` に1体ずつある。どれも bake6.html と同じ部品（`part` / `joint` / `capsule` / `toon` / `rampSoft` / `outlineMat`）で組んであるので、キャラを組み立てる関数をそのまま移植できる。
+ミニキャラは `characters/<作成者>/<id>.html` に1体ずつある。どれも bake6.html と同じ部品（`part` / `joint` / `capsule` / `toon` / `rampSoft` / `outlineMat`）で組んであるので、キャラを組み立てる関数をそのまま移植できる。
 例として、2026-10-19 に B2 を c02 に置き換えている（`bake6.html` の `C02` / `O02` / `makeCharaC02()`）。
 
-1. **cXX.html から3つをコピーする**
+1. **キャラの html から3つをコピーする**
    - `const C = { ... }`（体の色）
    - `const O = { ... }`（輪郭の発光色）
    - `function makeChara() { ... }`（キャラの組み立て）
 2. **bake6.html に貼って名前を変える**：`makeCharaC02()` の後に貼り、`C` → `C0X`、`O` → `O0X`、`makeChara` → `makeCharaC0X` にする。
    - 関数の**中身**は `C.hair` や `O.hair` のまま変えない。`makeCharaWith()` が組み立ての間だけ、グローバルの `C` / `O` を席の色に差し替える。
-   - cXX.html にしかない補助関数や定数を使っていたら、それも一緒に移す。
+   - そのキャラの html にしかない補助関数や定数を使っていたら、それも一緒に移す。
 3. **関節の名前をそろえる**：`bakePose()` と `__bake.shot()` が使うので、返す `J` に次がすべて必要。
    `root, hips, thighL/R, kneeL/R, chest, shL/R, elL/R, neck, head, eyes, braidL/R`
    おさげがないキャラは、c02 の末尾と同じく空の `joint` を `braidL/R` に入れておく。
 4. **席を差し替える**：`VARIANTS` の該当行を次の形にする（席の並びは A1, A2, A3, B1, B2, B3 = 0〜5）。
    ```js
-   { make: makeCharaC0X, O: O0X, ...C0X },   // B2: characters/c0X
+   { make: makeCharaC0X, O: O0X, ...C0X },   // B2: characters/maple/c0X
    ```
    `make` を省くと `makeChara()`（標準のおさげキャラ）で組み、色だけ変わる。
 5. **焼き直す**：上の「実行」の3コマンド。まず `--test` の `test_all.png` で、差し替えた席に新しいキャラがいるかを見る。

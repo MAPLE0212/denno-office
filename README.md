@@ -46,17 +46,20 @@ node server/server.js
 
 ### キャラを追加する
 
-`characters/` に Three.js で作ったキャラの HTML（`cXX.html`）を置き、`characters/characters.json` に1行足すと、オフィスとマイページに出てきます。作り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+キャラは作成者ごとのフォルダ `characters/<作成者>/` に入っていて、マイページでは作成者ごとのタブになります。雛形 `characters/_template.html` をコピーして自分のフォルダで作り、一覧（`characters.json`）に足すと、オフィスとマイページに出てきます。作風は自由で、オフィスで動くための決まりだけ守れば大丈夫です。作り方・チェックのしかた・Pull Request の送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+
+公開しないで自分のオフィスだけで使うキャラは `characters/local/`（git に入りません）に置きます。
 
 ## フォルダ構成
 
 | パス | 中身 |
 |---|---|
 | `server/` | サーバ（`server.js`）と画面（`public/`）。依存パッケージなし |
-| `characters/` | キャラ（`cXX.html` = 3D モデル、`cXX_front.png` = マイページ用の画像）と一覧 `characters.json` |
+| `characters/` | 作成者ごとのフォルダにキャラ（`<id>.html` = 3D モデル、`<id>_front.png` = マイページ用の画像）と一覧 `characters.json`。雛形 `_template.html` |
 | `firmware/` | StopWatch のファームウェア（`main.cpp`、焼き込んだ絵 `office_art.h`） |
-| `tools/` | 3D の絵を StopWatch 用に焼くスクリプト（Python + ヘッドレス Chromium） |
+| `tools/` | キャラのチェック（`check_chara.mjs`）、3D の絵を StopWatch 用に焼くスクリプト（Python + ヘッドレス Chromium） |
 | `docs/` | 実装メモ |
+| `.github/` | Pull Request のときのキャラのチェック（GitHub Actions）と PR のテンプレート |
 | `platformio.ini` | StopWatch のビルド設定 |
 
 ## StopWatch 版（任意）
@@ -106,7 +109,7 @@ python3 -m venv .venv
 |---|---|---|
 | GET | `/api/state` | 全員の状態 |
 | GET | `/api/characters` | キャラ一覧 |
-| PATCH | `/api/members/<id>` | `{ present?, comment?: { text, duration } \| null, character?: "c01" \| null }` |
+| PATCH | `/api/members/<id>` | `{ present?, comment?: { text, duration } \| null, character?: "maple/c01" \| null }` |
 | GET | `/api/events` | 状態が変わるたびに `state` を送る（Server-Sent Events） |
 | GET | `/api/device` | StopWatch 用（1 行 1 席のタブ区切り） |
 

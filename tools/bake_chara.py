@@ -1,15 +1,16 @@
 """StopWatch 用に、characters/ の完成キャラを6席分の「はんこ」（差分スプライト）として焼く。
 
-usage: .venv/bin/python bake_chara.py c03 [c15 ...]     （サーバ server/server.js を起動しておく）
+usage: .venv/bin/python bake_chara.py maple/c03 [maple/c15 ...]     （サーバ server/server.js を起動しておく）
   - キャラは サーバの /charas.js から読む（DENNO_SERVER で場所を変更、既定 http://localhost:8080）
-  - 出力: ../server/sprites/<cid>/<A1..B3>.bin と bake_out/<cid>_preview.png（実機の背景に6席重ねた見本）
+  - キャラの ID は "<作成者>/<id>"（characters/<作成者>/<id>.html）
+  - 出力: ../server/sprites/<作成者>/<id>/<A1..B3>.bin と bake_out/<作成者>_<id>_preview.png（実機の背景に6席重ねた見本）
 
 .bin の形式（リトルエンディアン）
   "DSP1" / uint16 x, y, w, h / uint16 frames / uint16 hasBlink /
   uint32 offsets[frames * (1 + hasBlink)]  … データ部の先頭からのバイト位置（通常の frames コマ → まばたき frames コマ）
   データ部: pack6.py と同じ、行ごとのランレングス（nRuns, (skip, len, RGB565 画素…)…）を uint16 で
 """
-import sys, os, re, io, json, base64, struct, time, threading, functools, http.server, urllib.request
+import sys, os, re, io, json, base64, struct, time, threading, functools, http.server, urllib.request, urllib.parse
 import numpy as np
 from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright
@@ -24,7 +25,7 @@ N = 10
 THR = 14
 SEAT_CODES = ["A1", "A2", "A3", "B1", "B2", "B3"]
 
-cids = [a for a in sys.argv[1:] if re.fullmatch(r"c\d\d", a)]
+cids = [a for a in sys.argv[1:] if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}/[a-z0-9][a-z0-9_-]{0,31}", a)]
 if not cids:
     sys.exit(__doc__)
 
@@ -110,7 +111,7 @@ with sync_playwright() as p:
 
     for cid in cids:
         t0 = time.time()
-        open_page(f"?c={cid}")
+        open_page(f"?c={urllib.parse.quote(cid)}")
         canvas = DEVICE_BG.copy()
         os.makedirs(os.path.join(OUT_SPRITES, cid), exist_ok=True)
         total = 0
@@ -145,7 +146,7 @@ with sync_playwright() as p:
         pv = Image.fromarray(canvas.astype(np.uint8))
         mk = Image.new("L", (466, 466), 0); ImageDraw.Draw(mk).ellipse((0, 0, 465, 465), fill=255)
         o = Image.new("RGB", (466, 466)); o.paste(pv, (0, 0), mk)
-        o.save(os.path.join(OUT_PREVIEW, f"{cid}_preview.png"))
+        o.save(os.path.join(OUT_PREVIEW, f"{cid.replace('/', '_')}_preview.png"))
         json.dump({"cid": cid, "bakedAt": int(time.time()), "bytes": total}, open(os.path.join(OUT_SPRITES, cid, "meta.json"), "w"))
         print(f"{cid}: {total / 1024:.0f} KB, {time.time() - t0:.0f} s")
     b.close()

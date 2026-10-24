@@ -108,7 +108,7 @@ import makeCharas from "/charas.js";
 const $ = (id) => document.getElementById(id);
 const stage = $("stage"), overlay = $("overlay");
 
-// ---- renderer / scene（characters/cXX.html と同じ見た目） ----
+// ---- renderer / scene（characters/<作成者>/<id>.html と同じ見た目） ----
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 stage.prepend(renderer.domElement);
@@ -245,7 +245,7 @@ function applyState(s) {
   $("reset").textContent = `毎晩 ${s.resetAt} に全員を不在に戻します`;
 }
 
-// ---- ポーズ（characters/cXX.html の座りポーズ。作業中とひと休みを席ごとに） ----
+// ---- ポーズ（characters/<作成者>/<id>.html の座りポーズ。作業中とひと休みを席ごとに） ----
 function applyPose(P, T) {
   const J = P.chara, t = T + P.phase, r = (g, x = 0, y = 0, z = 0) => g && g.rotation.set(x, y, z);
   const breathe = Math.sin(t * 1.8) * 0.006;

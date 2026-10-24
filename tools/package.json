@@ -1,7 +1,10 @@
 {
   "name": "denno-office-tools",
   "private": true,
-  "description": "3D のキャラやオフィスをヘッドレス Chromium で焼くときに使う three.js（CDN の代わりにローカルから読む）",
+  "description": "キャラのチェック（check_chara.mjs）と、3D のキャラやオフィスをヘッドレス Chromium で焼くときに使う three.js（CDN の代わりにローカルから読む）",
+  "scripts": {
+    "check": "node check_chara.mjs"
+  },
   "dependencies": {
     "three": "0.160.0"
   }
