@@ -65,6 +65,41 @@
 .char .label { font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .char .used { font-size: 11px; color: var(--accent); }
 
+.char.new { align-items: center; justify-content: center; text-align: center; border-style: dashed; min-height: 150px; }
+.char.new .plus { font-size: 30px; line-height: 1; color: var(--accent); }
+.char.new .label { -webkit-line-clamp: 3; }
+.char .fix { font-size: 11px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* パーツで作る */
+.maker-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+.maker-head h2 { margin: 0; }
+.maker-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; align-items: start; }
+.mstage { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: #0b1124; }
+.mstage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.mstage .seg { position: absolute; left: 8px; bottom: 8px; background: rgba(10, 14, 26, .8); }
+.mrow { margin-bottom: 14px; }
+.mlabel { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.mopts { display: flex; flex-wrap: wrap; gap: 6px; }
+.mopts .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+.mopts .chip:disabled { opacity: .4; cursor: default; }
+.mswatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch {
+  width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; position: relative;
+}
+.swatch[aria-pressed="true"] { border-color: var(--fg); box-shadow: 0 0 0 2px var(--glow); }
+.swatch.free { background: conic-gradient(#ff8fa3, #ffd36e, #8ff0b0, #7fc8ff, #b48cff, #ff8fa3); display: grid; place-items: center; }
+.swatch.free input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.swatch:focus-within, .swatch:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+.maker-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+.maker-foot input {
+  flex: 1; min-width: 140px; font: inherit; color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+}
+@media (max-width: 640px) {
+  .maker-body { grid-template-columns: 1fr; }
+  .mstage { aspect-ratio: 4 / 3; }
+}
+
 .pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .pick a {
   display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
@@ -139,12 +174,45 @@
       <h2>キャラ</h2>
       <div class="tabs" id="authorTabs" role="tablist" aria-label="作成者"></div>
       <div class="chars" id="chars" role="tabpanel"></div>
-      <p class="hint">作成者ごとに並んでいます。「準備中」の子は完成すると選べるようになります。</p>
+      <p class="hint">作成者ごとに並んでいます。「準備中」の子は完成すると選べるようになります。「パーツで作成」のタブでは、髪型や服を選んで自分の子を作れます。</p>
+    </section>
+
+    <!-- パーツでキャラを作る（parts-maker.js） -->
+    <section class="card" id="maker" hidden>
+      <div class="maker-head">
+        <h2 id="makerTitle">パーツでキャラを作る</h2>
+        <button class="btn" id="makerRandom">おまかせ</button>
+      </div>
+      <div class="maker-body">
+        <div class="mstage" id="makerStage">
+          <div class="seg" role="group" aria-label="ポーズ">
+            <button type="button" data-mpose="stand" aria-pressed="true">立ち</button>
+            <button type="button" data-mpose="sit" aria-pressed="false">座り</button>
+          </div>
+        </div>
+        <div>
+          <div class="tabs" id="makerTabs" role="tablist" aria-label="部品"></div>
+          <div id="makerRows" role="tabpanel"></div>
+        </div>
+      </div>
+      <div class="maker-foot">
+        <input id="makerName" type="text" maxlength="20" placeholder="この子の名前（なくてもよい）" aria-label="キャラの名前" autocomplete="off">
+        <button class="btn" id="makerCancel">やめる</button>
+        <button class="btn primary" id="makerSave">保存してこの子にする</button>
+      </div>
+      <p class="hint">ドラッグで回して見られます。保存すると「パーツで作成」のタブに入り、オフィスでもこの子が座ります。</p>
     </section>
   </div>
 </div>
 
 <script src="/common.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module" src="/parts-maker.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const myId = (location.pathname.match(/^\/me\/([\w-]+)/) || [])[1];
@@ -255,6 +323,7 @@ function renderAuthorTabs() {
   const m = me();
   const authors = [];
   for (const c of characters) if (!authors.some((a) => a.id === c.author)) authors.push({ id: c.author, name: c.authorName });
+  if (!authors.some((a) => a.id === "parts")) authors.push({ id: "parts", name: "パーツで作成" }); // まだ誰も作っていなくても、作る入口として出す
   if (!authors.some((a) => a.id === author)) {
     const mine = m.character && characters.find((c) => c.id === m.character.id);
     author = mine ? mine.author : (authors[0] && authors[0].id);
@@ -279,7 +348,7 @@ function renderChars() {
   renderAuthorTabs();
   const usedBy = {};
   for (const x of state.members) if (x.character && x.id !== myId) (usedBy[x.character.id] ||= []).push(x.name);
-  $("chars").replaceChildren(...characters.filter((c) => c.author === author).map((c) => {
+  const cards = characters.filter((c) => c.author === author).map((c) => {
     const b = document.createElement("button");
     b.className = "char";
     b.disabled = !c.available;
@@ -297,11 +366,37 @@ function renderChars() {
       u.textContent = `${usedBy[c.id].join("・")}さんも使用中`;
       meta.append(u);
     }
+    if (c.recipe && c.by === myId) {
+      const fix = document.createElement("span");
+      fix.className = "fix";
+      fix.setAttribute("role", "button");
+      fix.tabIndex = 0;
+      fix.textContent = "直す";
+      const openFix = (e) => { e.stopPropagation(); openMaker(c); };
+      fix.addEventListener("click", openFix);
+      fix.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") openFix(e); });
+      meta.append(fix);
+    }
     b.append(Denno.avatar(c.available ? c : null), meta);
     b.addEventListener("click", () => send({ character: c.id }, `${c.label} にしました`));
     return b;
-  }));
+  });
+  if (author === "parts") {
+    const b = document.createElement("button");
+    b.className = "char new";
+    b.innerHTML = `<span class="plus" aria-hidden="true">＋</span><span class="label">パーツで新しく作る</span>`;
+    b.addEventListener("click", () => openMaker(null));
+    cards.unshift(b);
+  }
+  $("chars").replaceChildren(...cards);
 }
+
+// 作成画面（parts-maker.js）は three.js を読み込んでから使えるようになる
+function openMaker(chara) {
+  if (window.PartsMaker) return window.PartsMaker.open(chara);
+  Denno.toast("作成画面を準備中です。少し待ってからもう一度押してください", true);
+}
+window.addEventListener("parts-saved", () => { author = "parts"; loadCharacters(); });
 
 // 続けて押されても順番に送る
 function send(body, okMsg) {

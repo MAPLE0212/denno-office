@@ -9,13 +9,15 @@
 // 画面
 //   /          オフィス（島6席の様子を Three.js で。キャラは /charas.js）
 //   /me        マイページ（自分を選ぶ）
-//   /me/<id>   マイページ（在席・ひとりごと・キャラ）
+//   /me/<id>   マイページ（在席・ひとりごと・キャラ。パーツでキャラを作る画面もここ）
 // API
 //   GET   /api/state            全員の状態
 //   GET   /api/characters       キャラ一覧（characters/<作成者>/characters.json から）
 //   PATCH /api/members/<id>     { present?, comment?: {text, duration} | null, character?: "maple/c01" | null }
 //   GET   /api/events           状態が変わるたびに "state" を送る（Server-Sent Events）
 //   GET   /api/device           StopWatch 用の軽い形式（1行1席のタブ区切り）
+//   POST  /api/parts            パーツで作ったキャラを足す { by, label, feature, recipe, image }
+//   PUT   /api/parts/<id>       パーツで作ったキャラを直す（作った人だけ）
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -66,6 +68,7 @@ function authorDirs() {
 function loadCharacters() {
   const list = [];
   for (const author of authorDirs()) {
+    if (author === PARTS_AUTHOR) continue; // パーツで作ったキャラ用の名前なので、フォルダは使わない
     let doc;
     try { doc = JSON.parse(fs.readFileSync(path.join(CHARACTERS_DIR, author, "characters.json"), "utf8")); } catch { continue; }
     const authorName = String(doc.author || (author === "local" ? "自分用" : author));
@@ -86,7 +89,96 @@ function loadCharacters() {
       });
     }
   }
+  for (const p of loadParts()) {
+    if (!NAME_RE.test(p.id)) continue;
+    list.push({
+      id: `${PARTS_AUTHOR}/${p.id}`,
+      name: p.id,
+      author: PARTS_AUTHOR,
+      authorName: "パーツで作成",
+      label: p.label,
+      feature: p.feature || "",
+      status: "完成",
+      available: true,
+      image: fs.existsSync(partsImageFile(p.id)) ? `/img/chars/${PARTS_AUTHOR}/${p.id}.png?v=${p.updatedAt}` : null,
+      by: p.by,
+      recipe: p.recipe,
+    });
+  }
   return list;
+}
+
+// ---------- パーツで作ったキャラ ----------
+
+// マイページの「パーツで作る」で作ったキャラは、作成者 "parts" のキャラとして並ぶ（ID は "parts/p001"）。
+// 中身は部品の選び方（レシピ）だけで、組み立ては characters/_parts.js。保存先は data/ の下（git に入らない）。
+//   data/parts.json      { characters: [{ id, label, feature, recipe, by, createdAt, updatedAt }] }
+//   data/parts/<id>.png  マイページ用の写真（作成画面で撮ったもの）
+const PARTS_AUTHOR = "parts";
+const PARTS_LIB = path.join(CHARACTERS_DIR, "_parts.js");
+const PARTS_FILE = path.join(path.dirname(DATA_FILE), "parts.json");
+const PARTS_IMG_DIR = path.join(path.dirname(DATA_FILE), "parts");
+const PARTS_MAX = 500;
+const RECIPE_STYLES = ["hair", "hat", "top", "bottom", "shoes", "brows"];
+const RECIPE_COLORS = ["hairColor", "topColor", "subColor", "bottomColor", "shoesColor", "eyeColor"];
+
+function loadParts() {
+  try { return JSON.parse(fs.readFileSync(PARTS_FILE, "utf8")).characters || []; } catch { return []; }
+}
+
+function saveParts(list) {
+  fs.mkdirSync(path.dirname(PARTS_FILE), { recursive: true });
+  const tmp = PARTS_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify({ characters: list }, null, 2));
+  fs.renameSync(tmp, PARTS_FILE);
+}
+
+// 届いたレシピから、知っている項目だけを取り出す（部品の id が知らないものなら組み立て側で既定に戻る）
+function cleanRecipe(r) {
+  if (!r || typeof r !== "object") return null;
+  const out = {};
+  for (const k of RECIPE_STYLES) if (typeof r[k] === "string" && /^[a-z0-9-]{1,20}$/.test(r[k])) out[k] = r[k];
+  for (const k of RECIPE_COLORS) if (Number.isInteger(r[k]) && r[k] >= 0 && r[k] <= 0xffffff) out[k] = r[k];
+  return out;
+}
+
+// 作成画面で撮った写真（data:image/png;base64,...）を保存する。無い・おかしいときは何もしない
+function savePartsImage(id, dataUrl) {
+  const m = typeof dataUrl === "string" && dataUrl.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return;
+  const buf = Buffer.from(m[1], "base64");
+  if (buf.length > 400 * 1024 || buf.readUInt32BE(0) !== 0x89504e47) return;
+  fs.mkdirSync(PARTS_IMG_DIR, { recursive: true });
+  fs.writeFileSync(path.join(PARTS_IMG_DIR, `${id}.png`), buf);
+}
+
+function partsImageFile(name) { return path.join(PARTS_IMG_DIR, `${name}.png`); }
+
+// POST（id なし）なら足す、PUT（id あり）なら直す。[状態コード, エラー or 保存したキャラ]
+function savePartsChara(body, id) {
+  const recipe = cleanRecipe(body.recipe);
+  if (!recipe) return [400, "レシピがありません"];
+  const by = String(body.by || "");
+  if (!state.members[by]) return [400, "作った人が分かりません"];
+  const label = String(body.label || "").replace(/\s+/g, " ").trim().slice(0, 20) || "パーツの子";
+  const feature = String(body.feature || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  const list = loadParts();
+  const now = Date.now();
+  let c;
+  if (id) {
+    c = list.find((x) => x.id === id);
+    if (!c) return [404, "そのキャラはいません"];
+    if (c.by !== by) return [403, "作った人だけが直せます"];
+    Object.assign(c, { label, feature, recipe, updatedAt: now });
+  } else {
+    if (list.length >= PARTS_MAX) return [400, "これ以上は作れません"];
+    const n = list.reduce((a, x) => Math.max(a, Number(x.id.slice(1)) || 0), 0) + 1;
+    c = { id: `p${String(n).padStart(3, "0")}`, label, feature, recipe, by, createdAt: now, updatedAt: now };
+    list.push(c);
+  }
+  savePartsImage(c.id, body.image);
+  saveParts(list);
+  return [200, c];
 }
 
 // 作成者フォルダにする前の ID（"c01"）を、同じ名前のキャラの新しい ID（"maple/c01"）に直す
@@ -102,12 +194,18 @@ function migrateCharacterId(cid) {
 function charasModule() {
   const parts = [];
   for (const c of loadCharacters()) {
-    if (!c.available) continue;
+    if (!c.available || c.author === PARTS_AUTHOR) continue;
     let src;
     try { src = fs.readFileSync(charaFile(c.id, ".html"), "utf8"); } catch { continue; }
     const a = src.indexOf("const C = {"), b = src.indexOf("// ---- set:");
     if (a < 0 || b < a) continue;
     parts.push(`charas[${JSON.stringify(c.id)}] = () => {\n${src.slice(a, b)}\nreturn makeChara();\n};`);
+  }
+  // パーツで作ったキャラは最後に（キャラ未設定の席に出す仮キャラの並びが変わらないように）
+  const made = loadParts().filter((p) => NAME_RE.test(p.id));
+  if (made.length) {
+    parts.push(`const makePartsChara = (() => {\n${partsLib()}\nreturn makePartsChara;\n})();`);
+    for (const p of made) parts.push(`charas[${JSON.stringify(`${PARTS_AUTHOR}/${p.id}`)}] = () => makePartsChara(${JSON.stringify(p.recipe)});`);
   }
   return [
     "// characters/<作成者>/<id>.html から server.js が自動で組み立てたキャラ一覧",
@@ -115,6 +213,21 @@ function charasModule() {
     "const charas = {};",
     ...parts,
     "return charas;",
+    "}",
+  ].join("\n");
+}
+
+function partsLib() {
+  try { return fs.readFileSync(PARTS_LIB, "utf8"); } catch { return "const PARTS = {}; const PARTS_PALETTE = {}; const PARTS_DEFAULT = {}; function makePartsChara() { return null; }"; }
+}
+
+// マイページの作成画面用：部品の一覧と組み立てを1つの ES モジュールにする
+function partsModule() {
+  return [
+    "// characters/_parts.js から server.js が組み立てた、パーツでキャラを作るための部品",
+    "export default function makeParts({ THREE, toon, outlineMat, ramp, rampSoft, outlineUniforms }) {",
+    partsLib(),
+    "return { PARTS, PARTS_PALETTE, PARTS_DEFAULT, build: makePartsChara };",
     "}",
   ].join("\n");
 }
@@ -128,8 +241,15 @@ const OFFICE_SEATS = ["B1", "B2", "B3", "A1", "A2", "A3"]; // 3D オフィスで
 // 3D に出せる完成キャラ（<id>.html があるもの）。タブの順、その中は characters.json の順
 function chara3dIds() {
   return loadCharacters()
-    .filter((c) => c.available && fs.existsSync(charaFile(c.id, ".html")))
+    .filter((c) => c.available && (c.author === PARTS_AUTHOR || fs.existsSync(charaFile(c.id, ".html"))))
     .map((c) => c.id);
+}
+
+// キャラを最後に直した時刻（秒）。焼き直すかどうかの判断に使う
+function charaEditedAt(cid) {
+  const [author, name] = cid.split("/");
+  if (author === PARTS_AUTHOR) { const p = loadParts().find((x) => x.id === name); return p ? p.updatedAt / 1000 : 0; }
+  return fs.statSync(charaFile(cid, ".html")).mtimeMs / 1000;
 }
 
 // StopWatch に出すキャラ。未設定の人は 3D オフィスと同じく、席ごとに決まった完成キャラ
@@ -151,8 +271,7 @@ function bakeMissing() {
   if (baking || !fs.existsSync(py)) return;
   const todo = chara3dIds().filter((cid) => {
     const v = spriteVersion(cid);
-    const edited = fs.statSync(charaFile(cid, ".html")).mtimeMs / 1000;
-    return !v || edited > v;
+    return !v || charaEditedAt(cid) > v;
   });
   if (!todo.length) return;
   baking = true;
@@ -335,10 +454,10 @@ function sendFile(res, file) {
   });
 }
 
-function readBody(req) {
+function readBody(req, max = 10000) {
   return new Promise((resolve, reject) => {
     let raw = "";
-    req.on("data", (c) => { raw += c; if (raw.length > 10000) req.destroy(); });
+    req.on("data", (c) => { raw += c; if (raw.length > max) req.destroy(); });
     req.on("end", () => { try { resolve(raw ? JSON.parse(raw) : {}); } catch (e) { reject(e); } });
     req.on("error", reject);
   });
@@ -382,6 +501,22 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, code, error ? { error } : publicState());
   }
 
+  const pm = p.match(/^\/api\/parts(?:\/([a-z0-9][a-z0-9_-]{0,31}))?$/);
+  if (pm && (req.method === "POST" && !pm[1] || req.method === "PUT" && pm[1])) {
+    let body;
+    try { body = await readBody(req, 600 * 1024); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+    const [code, out] = savePartsChara(body || {}, pm[1]);
+    if (code !== 200) return sendJson(res, code, { error: out });
+    broadcast();
+    bakeMissing();
+    return sendJson(res, 200, { id: `${PARTS_AUTHOR}/${out.id}` });
+  }
+
+  if (p === "/parts.js") {
+    res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
+    return res.end(partsModule());
+  }
+
   if (p === "/charas.js") {
     res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
     return res.end(charasModule());
@@ -391,7 +526,10 @@ const server = http.createServer(async (req, res) => {
   if (sp && ID_RE.test(sp[1])) return sendFile(res, path.join(SPRITES_DIR, sp[1], `${sp[2]}.bin`));
 
   const im = p.match(/^\/img\/chars\/(.+)\.png$/);
-  if (im && ID_RE.test(im[1])) return sendFile(res, charaFile(im[1], "_front.png"));
+  if (im && ID_RE.test(im[1])) {
+    const [author, name] = im[1].split("/");
+    return sendFile(res, author === PARTS_AUTHOR ? partsImageFile(name) : charaFile(im[1], "_front.png"));
+  }
 
   if (p === "/") return sendFile(res, path.join(PUBLIC_DIR, "office.html"));
   if (p === "/me" || /^\/me\/[\w-]+$/.test(p)) return sendFile(res, path.join(PUBLIC_DIR, "me.html"));
