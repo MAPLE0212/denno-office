@@ -119,8 +119,8 @@ const PARTS_LIB = path.join(CHARACTERS_DIR, "_parts.js");
 const PARTS_FILE = path.join(path.dirname(DATA_FILE), "parts.json");
 const PARTS_IMG_DIR = path.join(path.dirname(DATA_FILE), "parts");
 const PARTS_MAX = 500;
-const RECIPE_STYLES = ["hair", "hat", "top", "bottom", "shoes", "brows"];
-const RECIPE_COLORS = ["hairColor", "topColor", "subColor", "bottomColor", "shoesColor", "eyeColor"];
+const RECIPE_STYLES = ["hair", "hat", "top", "bottom", "shoes", "brows", "acc"];
+const RECIPE_COLORS = ["hairColor", "topColor", "subColor", "bottomColor", "shoesColor", "eyeColor", "hatColor", "accColor"];
 
 function loadParts() {
   try { return JSON.parse(fs.readFileSync(PARTS_FILE, "utf8")).characters || []; } catch { return []; }

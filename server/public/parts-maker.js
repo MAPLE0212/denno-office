@@ -31,9 +31,9 @@ const { PARTS, PARTS_PALETTE, PARTS_DEFAULT, build } = makeParts({ THREE, toon, 
 
 // 作成画面のならび：どのタブに、どの部品と色を出すか
 const GROUPS = [
-  { id: "hair", label: "髪", rows: [["style", "hair", "髪型"], ["style", "hat", "帽子"], ["color", "hairColor", "髪の色"]] },
+  { id: "hair", label: "髪", rows: [["style", "hair", "髪型"], ["color", "hairColor", "髪の色"], ["style", "hat", "帽子"], ["color", "hatColor", "帽子の色（ベレー帽）"]] },
   { id: "face", label: "顔", rows: [["style", "brows", "まゆげ"], ["color", "eyeColor", "目の色"]] },
-  { id: "top", label: "服", rows: [["style", "top", "服"], ["color", "topColor", "服の色"], ["color", "subColor", "中に着る服・裏地の色"]] },
+  { id: "top", label: "服", rows: [["style", "top", "服"], ["color", "topColor", "服の色"], ["color", "subColor", "中に着る服の色"], ["style", "acc", "小物"], ["color", "accColor", "小物の色"]] },
   { id: "bottom", label: "ズボン・くつ", rows: [["style", "bottom", "ズボン"], ["color", "bottomColor", "ズボンの色"], ["style", "shoes", "くつ"], ["color", "shoesColor", "くつの色"]] },
 ];
 
@@ -244,7 +244,7 @@ function random() {
 function feature() {
   const parts = [labelOf("hair") + "の髪"];
   if (recipe.hat !== "none") parts.push(labelOf("hat"));
-  parts.push(labelOf("top"), labelOf("bottom"), labelOf("shoes") === "スニーカー" ? "スニーカー" : "");
+  parts.push(labelOf("top"), labelOf("bottom"), recipe.shoes !== "plain" ? labelOf("shoes") : "", recipe.acc !== "none" ? labelOf("acc") : "");
   return parts.filter(Boolean).join("、");
 }
 
@@ -297,4 +297,5 @@ $("makerSave").addEventListener("click", save);
 $("makerCancel").addEventListener("click", close);
 
 window.PartsMaker = { open, close };
+window.__view = { camera, controls }; // キャラの html と同じく、外から視点を動かして確かめるため
 window.dispatchEvent(new Event("parts-maker-ready"));
