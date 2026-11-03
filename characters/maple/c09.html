@@ -1,0 +1,404 @@
+<meta charset="utf-8">
+<title>電脳オフィス キャラ試作 c09</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* layout: 3D stage on top, one control strip under it */
+:root {
+  --bg: #0a0e1a;
+  --panel: #121a2b;
+  --fg: #e6ecff;
+  --muted: #8d9abb;
+  --line: #24304a;
+  --accent: #9db8ff;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 24px;
+}
+.wrap { max-width: 1000px; margin: 0 auto; display: grid; gap: 12px; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; }
+h1 { font-size: 18px; margin: 0; }
+.sub { margin: 0; color: var(--muted); font-size: 12px; }
+.stage { position: relative; width: 100%; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #0b1124; border: 1px solid var(--line); max-width: 100%; }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.group { display: flex; align-items: center; gap: 8px; }
+.group > span, .group label { color: var(--muted); font-size: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 5px 11px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #0a0e1a; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="range"] { width: 120px; accent-color: var(--accent); }
+.val { font-family: var(--font-mono); font-size: 12px; min-width: 2.5em; }
+.note { margin: 0; color: var(--muted); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>電脳オフィス キャラ試作 c09</h1>
+    <p class="sub">紺のおさげ（三つ編み2本）に水色のマフラーを巻いて、トグルで留めた紫のダッフルコート、紺のタイツにロングブーツの子。関節付きでポーズを変えられます。</p>
+  </header>
+  <div class="stage" id="stage"></div>
+  <div class="controls">
+    <div class="group">
+      <span>ポーズ</span>
+      <div class="seg" role="group" aria-label="ポーズ">
+        <button type="button" data-pose="typing" aria-pressed="true">座って作業</button>
+        <button type="button" data-pose="sit" aria-pressed="false">座って待機</button>
+        <button type="button" data-pose="stand" aria-pressed="false">立ち</button>
+      </div>
+    </div>
+    <div class="group">
+      <label for="glow">グロー</label>
+      <input type="range" id="glow" min="0" max="2" step="0.05" value="0.9">
+      <span class="val" id="glowVal">0.90</span>
+    </div>
+    <div class="group">
+      <label for="line">輪郭の太さ</label>
+      <input type="range" id="line" min="0" max="0.012" step="0.001" value="0.005">
+      <span class="val" id="lineVal">5</span>
+    </div>
+  </div>
+  <p class="note">ドラッグで視点を回転、ホイールやピンチで拡大縮小できます。</p>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+
+const stage = document.getElementById("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+stage.append(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1124);
+const camera = new THREE.PerspectiveCamera(30, 1.6, 0.02, 30);
+camera.position.set(0.95, 0.95, 1.55);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0.05, 0.45, 0);
+controls.enableDamping = true;
+controls.minDistance = 0.6; controls.maxDistance = 5;
+controls.maxPolarAngle = Math.PI * 0.495;
+
+scene.add(new THREE.HemisphereLight(0xe8ecff, 0x3a2f66, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(1.2, 2.5, 2);
+scene.add(key);
+
+// ---- materials ----
+const ramp = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 180, 180, 180, 255, 255, 255, 255, 255]), 3, 1);
+ramp.minFilter = ramp.magFilter = THREE.NearestFilter; ramp.needsUpdate = true;
+const toon = (c) => new THREE.MeshToonMaterial({ color: c, gradientMap: ramp });
+const rampSoft = new THREE.DataTexture(new Uint8Array([200, 200, 200, 255, 235, 235, 235, 255, 255, 255, 255, 255]), 3, 1);
+rampSoft.minFilter = rampSoft.magFilter = THREE.NearestFilter; rampSoft.needsUpdate = true;
+const outlineUniforms = { thickness: { value: 0.005 } };
+function outlineMat(c, boost = 1.7) {
+  return new THREE.ShaderMaterial({
+    uniforms: { thickness: outlineUniforms.thickness, color: { value: new THREE.Color(c).multiplyScalar(boost) } },
+    vertexShader: `uniform float thickness; void main(){ vec3 p = position + normal * thickness; gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0); }`,
+    fragmentShader: `uniform vec3 color; void main(){ gl_FragColor = vec4(color,1.0); }`,
+    side: THREE.BackSide,
+  });
+}
+const C = {
+  skin: 0xfbe6e8, hair: 0x2c2f74, nose: 0xe39aab, coat: 0x5a4a9a, coatHi: 0x8270c8, inner: 0x262a5a,
+  scarf: 0x8cc6ff, scarfDk: 0x6aa6ec, toggle: 0xb8dcff, rope: 0x231c4a, tights: 0x30345e, boots: 0x22306c,
+  eye: 0x3a2432, cheek: 0xf59fb6, mouth: 0x9c4d60, tie: 0x8cc6ff,
+};
+const O = { hair: 0x7f9cff, coat: 0x9a72dc, scarf: 0x5fa6e6, tights: 0x6a74d0, skin: 0xb9a8ff, boots: 0x6f86ff };
+
+function part(parent, geo, color, outline, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
+  const m = new THREE.Mesh(geo, toon(color));
+  m.position.set(...pos); m.rotation.set(...rot); m.scale.set(...scl);
+  if (outline != null) m.add(new THREE.Mesh(geo, outlineMat(outline)));
+  parent.add(m);
+  return m;
+}
+function joint(parent, x, y, z) { const g = new THREE.Group(); g.position.set(x, y, z); parent.add(g); return g; }
+const capsule = (r, len) => new THREE.CapsuleGeometry(r, Math.max(0.001, len), 6, 16);
+
+// ---- character (faces +z, feet at y=0 when standing) ----
+function makeChara() {
+  const root = new THREE.Group();
+  const hips = joint(root, 0, 0.295, 0);
+  const J = { root, hips };
+
+  // tights seat
+  part(hips, new THREE.SphereGeometry(0.075, 20, 14), C.tights, O.tights, [0, 0.005, 0], [0, 0, 0], [1.25, 0.7, 1]);
+
+  // legs: dark navy tights and tall navy boots
+  for (const s of [-1, 1]) {
+    const k = s < 0 ? "L" : "R";
+    const thigh = joint(hips, s * 0.045, 0, 0);
+    part(thigh, capsule(0.041, 0.06), C.tights, O.tights, [0, -0.065, 0]);
+    const knee = joint(thigh, 0, -0.13, 0);
+    part(knee, capsule(0.035, 0.06), C.tights, O.tights, [0, -0.06, 0]);
+    // boot shaft from mid shin down to the ankle, with a soft rolled top
+    part(knee, new THREE.CylinderGeometry(0.041, 0.04, 0.085, 20), C.boots, O.boots, [0, -0.1, 0.002]);
+    part(knee, new THREE.TorusGeometry(0.039, 0.008, 8, 22), C.boots, O.boots, [0, -0.058, 0.002], [Math.PI / 2, 0, 0]);
+    const ankle = joint(knee, 0, -0.13, 0);
+    part(ankle, new THREE.SphereGeometry(0.047, 18, 12), C.boots, O.boots, [0, -0.01, 0.02], [0, 0, 0], [1, 0.78, 1.45]);
+    J["thigh" + k] = thigh; J["knee" + k] = knee;
+  }
+
+  // torso
+  const chest = joint(hips, 0, 0.02, 0);
+  J.chest = chest;
+  const V2 = (arr) => arr.map(([r, y]) => new THREE.Vector2(r, y));
+  // layering: a navy sweater is the base body; the duffle coat is a shell put on over it
+  part(chest, capsule(0.095, 0.1), C.inner, O.coat, [0, 0.1, 0], [0, 0, 0], [1.12, 1, 0.88]);
+  const SXc = 1.12, SZc = 0.88;
+  const coatPts = [[0.108, -0.06], [0.105, -0.02], [0.103, 0.05], [0.103, 0.13], [0.1, 0.165], [0.09, 0.195], [0.075, 0.217], [0.062, 0.23]];
+  const coatR = (y) => { for (let i = 1; i < coatPts.length; i++) { const a = coatPts[i - 1], b = coatPts[i]; if (y >= a[1] && y <= b[1]) return a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]); } return y < 0 ? 0.108 : 0.062; };
+  // the duffle is done up with toggles, so the shell is closed all the way round
+  const coat = part(chest, new THREE.LatheGeometry(V2(coatPts), 48), C.coat, O.coat, [0, 0, 0], [0, 0, 0], [SXc, 1, SZc]);
+  coat.material.side = THREE.DoubleSide;
+  const zSurf = (x, y) => { const r = coatR(y); return r * SZc * Math.sqrt(Math.max(0, 1 - (x / (r * SXc)) ** 2)); };
+  // overlapping front edge, a little to one side of the centre
+  part(chest, new THREE.BoxGeometry(0.005, 0.2, 0.004), C.coatHi, null, [-0.028, 0.08, zSurf(-0.028, 0.08) + 0.001]);
+  // toggles: a pale horn toggle on the right, a dark rope loop running across to the left
+  [0.15, 0.095, 0.04].forEach(y => {
+    const z = zSurf(0.0, y) + 0.004;
+    part(chest, capsule(0.0055, 0.016), C.toggle, O.scarf, [0.012, y, z], [0, 0, Math.PI / 2]);
+    part(chest, new THREE.BoxGeometry(0.036, 0.004, 0.003), C.rope, null, [-0.012, y, z - 0.002]);
+    part(chest, new THREE.SphereGeometry(0.004, 8, 6), C.rope, null, [-0.032, y, zSurf(-0.032, y) + 0.002]);
+  });
+  // coat skirt: flares from the waist to just above the knee, hung from the hips
+  const skirtPts = V2([[0.109, 0.02], [0.113, -0.02], [0.12, -0.06], [0.128, -0.1], [0.132, -0.125], [0.12, -0.127]]);
+  const skirt = part(hips, new THREE.LatheGeometry(skirtPts, 48), C.coat, O.coat, [0, 0, 0], [0, 0, 0], [SXc, 1, 0.92]);
+  skirt.material.side = THREE.DoubleSide;
+  // a fourth toggle and the front edge continue down the skirt
+  part(skirt, new THREE.BoxGeometry(0.005, 0.14, 0.004), C.coatHi, null, [-0.028, -0.055, 0.112], [-0.09, 0, 0]);
+  part(skirt, capsule(0.0055, 0.016), C.toggle, O.scarf, [0.012, -0.015, 0.108], [0, 0, Math.PI / 2]);
+  part(skirt, new THREE.BoxGeometry(0.036, 0.004, 0.003), C.rope, null, [-0.012, -0.015, 0.106]);
+  // patch pockets with flaps
+  for (const s of [-1, 1]) {
+    const pk = part(skirt, new THREE.BoxGeometry(0.052, 0.046, 0.006), C.coat, O.coat, [s * 0.072, -0.07, 0.098], [-0.08, s * 0.6, 0]);
+    part(pk, new THREE.BoxGeometry(0.056, 0.014, 0.008), C.coatHi, null, [0, 0.022, 0.002]);
+  }
+  // when seated, fold the coat skirt over the lap instead of letting it hang through the chair
+  skirt.onBeforeRender = () => {
+    const sit = THREE.MathUtils.clamp(-J.thighL.rotation.x / 1.5, 0, 1);
+    skirt.scale.set(SXc + 0.05 * sit, 1 - 0.15 * sit, 0.92 + 0.08 * sit);
+    skirt.position.set(0, 0.012 * sit, 0.0);
+    skirt.rotation.x = -1.1 * sit;
+  };
+
+  // scarf: two thick wraps round the neck and one fringed end hanging down the front
+  part(chest, new THREE.TorusGeometry(0.066, 0.03, 14, 32), C.scarf, O.scarf, [0, 0.212, 0.006], [Math.PI / 2 - 0.08, 0, 0], [1.12, 1, 1]);
+  part(chest, new THREE.TorusGeometry(0.06, 0.026, 14, 32), C.scarfDk, O.scarf, [0, 0.238, 0.0], [Math.PI / 2 + 0.06, 0, 0.05], [1.1, 1, 1]);
+  const tail = joint(chest, 0.05, 0.2, zSurf(0.05, 0.16) + 0.012);
+  tail.rotation.set(-0.12, 0, 0.04);
+  part(tail, new THREE.BoxGeometry(0.05, 0.12, 0.014), C.scarf, O.scarf, [0, -0.055, 0]);
+  [-0.018, -0.006, 0.006, 0.018].forEach(x => part(tail, new THREE.CylinderGeometry(0.0035, 0.0028, 0.022, 6), C.scarfDk, null, [x, -0.125, 0]));
+  part(tail, new THREE.BoxGeometry(0.05, 0.004, 0.016), C.scarfDk, null, [0, -0.095, 0]);
+
+  // arms: coat sleeves with a lighter turned-back cuff
+  for (const s of [-1, 1]) {
+    const k = s < 0 ? "L" : "R";
+    const sh = joint(chest, s * 0.115, 0.19, 0);
+    part(sh, capsule(0.038, 0.05), C.coat, O.coat, [0, -0.055, 0]);
+    const el = joint(sh, 0, -0.11, 0);
+    part(el, capsule(0.035, 0.045), C.coat, O.coat, [0, -0.045, 0]);
+    part(el, new THREE.CylinderGeometry(0.038, 0.038, 0.016, 18), C.coatHi, O.coat, [0, -0.076, 0]);
+    part(el, new THREE.SphereGeometry(0.03, 14, 10), C.skin, O.skin, [0, -0.1, 0]);
+    J["sh" + k] = sh; J["el" + k] = el;
+  }
+
+  // head
+  const neck = joint(chest, 0, 0.235, 0);
+  J.neck = neck;
+  const head = joint(neck, 0, 0.15, 0);
+  J.head = head;
+  const R = 0.165, SX = 1.08, SY = 0.95;
+  const face = part(head, new THREE.SphereGeometry(R, 40, 30), C.skin, O.skin, [0, 0, 0], [0, 0, 0], [SX, SY, 1]);
+  face.material.gradientMap = rampSoft;
+  face.material.emissive = new THREE.Color(C.skin).multiplyScalar(0.1);
+
+  // ---- face decals, placed on the head ellipsoid ----
+  const faceParts = new THREE.Group(); head.add(faceParts);
+  const zOn = (x, y) => R * Math.sqrt(Math.max(0, 1 - (x / (SX * R)) ** 2 - (y / (SY * R)) ** 2));
+  function decal(mesh, x, y, lift = 0.001) {
+    const z = zOn(x, y);
+    const nrm = new THREE.Vector3(x / (SX * SX), y / (SY * SY), z).normalize();
+    mesh.position.set(x, y, z).addScaledVector(nrm, lift);
+    mesh.lookAt(mesh.position.clone().add(nrm));
+    faceParts.add(mesh);
+    return mesh;
+  }
+  const flat = (c, opts = {}) => new THREE.MeshBasicMaterial({ color: c, ...opts });
+  const eyes = [];
+  for (const s of [-1, 1]) {
+    const e = decal(new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12), flat(C.eye)), s * 0.068, -0.03, 0);
+    e.scale.set(0.0145, 0.0185, 0.005);
+    eyes.push(e);
+    const ck = decal(new THREE.Mesh(new THREE.CircleGeometry(0.03, 24), flat(C.cheek, { transparent: true, opacity: 0.42, depthWrite: false })), s * 0.098, -0.066, 0.002);
+    ck.scale.set(1.35, 0.85, 1);
+    // ears peeking out under the hair
+    part(head, new THREE.SphereGeometry(0.03, 14, 10), C.skin, O.skin, [s * 0.176, -0.035, -0.004], [0, 0, 0], [0.45, 0.75, 0.6]);
+  }
+  decal(new THREE.Mesh(new THREE.CircleGeometry(0.0035, 10), flat(C.nose)), 0, -0.054, 0.001);
+  const mouth = decal(new THREE.Mesh(new THREE.CircleGeometry(0.0062, 16), flat(C.mouth)), 0, -0.08, 0.001);
+  mouth.scale.set(0.95, 1.2, 1);
+  J.eyes = eyes;
+
+  // ---- hair (same build as c01: crown, back and sides, blunt bangs, two braids) ----
+  const HR = R + 0.014;
+  const sphereSeg = (ps, pl, ts, tl) => new THREE.SphereGeometry(HR, 40, 24, ps, pl, ts, tl);
+  const hairMat = toon(C.hair); hairMat.side = THREE.DoubleSide;
+  const addHair = (geo, scl = [1.06, 0.98, 1.02], pos = [0, 0.004, 0]) => {
+    const m = new THREE.Mesh(geo, hairMat);
+    m.scale.set(...scl); m.position.set(...pos);
+    m.add(new THREE.Mesh(geo, outlineMat(O.hair)));
+    head.add(m); return m;
+  };
+  addHair(sphereSeg(0, Math.PI * 2, 0, Math.PI * 0.36));                                                        // crown
+  addHair(sphereSeg(Math.PI * 0.86, Math.PI * 1.28, Math.PI * 0.34, Math.PI * 0.46), [1.08, 1.0, 1.05], [0, -0.004, -0.006]); // back and sides
+  const P = Math.PI;
+  // blunt bangs in three blocks with thin gaps (front = phi 0.5π)
+  [[0.15, 0.225], [0.39, 0.22], [0.625, 0.225]].forEach(([ps, pl]) => {
+    const g = sphereSeg(P * ps, P * pl, P * 0.2, P * 0.27);
+    const m = new THREE.Mesh(g, hairMat);
+    m.scale.set(1.075, 0.985, 1.04); m.position.set(0, 0.004, 0.002);
+    head.add(m);
+  });
+
+  // twin braids from behind the jaw, resting on the scarf, tied with pale blue bands at the tips
+  for (const s of [-1, 1]) {
+    const braid = joint(head, s * 0.16, -0.12, -0.02);
+    const beads = [[0, 0, 0, 0.038], [s * 0.016, -0.05, 0.012, 0.034], [s * 0.024, -0.095, 0.022, 0.03], [s * 0.027, -0.135, 0.028, 0.025]];
+    beads.forEach(([x, y, z, r]) => part(braid, new THREE.SphereGeometry(r, 14, 10), C.hair, O.hair, [x, y, z], [0, 0, 0], [1, 1.2, 1]));
+    part(braid, new THREE.TorusGeometry(0.014, 0.006, 8, 16), C.tie, O.scarf, [s * 0.028, -0.163, 0.03], [Math.PI / 2, 0, 0]);
+    part(braid, new THREE.ConeGeometry(0.018, 0.035, 12), C.hair, O.hair, [s * 0.028, -0.185, 0.03], [Math.PI, 0, 0]);
+    J["braid" + (s < 0 ? "L" : "R")] = braid;
+  }
+  return J;
+}
+
+// ---- set: floor, desk, chair sized for the character ----
+const floor = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshStandardMaterial({ color: 0x0d1430, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const grid = new THREE.GridHelper(8, 40, 0x4a6cff, 0x22337a);
+grid.position.y = 0.002; grid.material.transparent = true; grid.material.opacity = 0.5; scene.add(grid);
+
+const furn = new THREE.MeshStandardMaterial({ color: 0x18213d, roughness: 0.85 });
+const edge = new THREE.LineBasicMaterial({ color: new THREE.Color(0x9fc0ff).multiplyScalar(1.5) });
+function nbox(w, h, d, x, y, z, ry = 0) {
+  const g = new THREE.BoxGeometry(w, h, d), m = new THREE.Mesh(g, furn);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edge));
+  m.position.set(x, y, z); m.rotation.y = ry; scene.add(m); return m;
+}
+const DESK_H = 0.4;
+nbox(0.8, 0.025, 0.42, 0, DESK_H, 0.33);
+nbox(0.025, DESK_H, 0.38, -0.38, DESK_H / 2, 0.33);
+nbox(0.025, DESK_H, 0.38, 0.38, DESK_H / 2, 0.33);
+nbox(0.24, 0.012, 0.08, 0.02, DESK_H + 0.018, 0.2);
+const mon = nbox(0.3, 0.19, 0.018, -0.22, DESK_H + 0.14, 0.45, -0.35);
+const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.16), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4a74ff).multiplyScalar(1.2) }));
+scr.position.z = -0.011; scr.rotation.y = Math.PI; mon.add(scr);
+const chair = new THREE.Group(); scene.add(chair);
+[[0.24, 0.03, 0.22, 0, 0.233, -0.02], [0.24, 0.22, 0.025, 0, 0.36, -0.13]].forEach(a => {
+  const g = new THREE.BoxGeometry(a[0], a[1], a[2]), m = new THREE.Mesh(g, furn);
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), edge)); m.position.set(a[3], a[4], a[5]); chair.add(m);
+});
+const post = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 8), furn); post.position.set(0, 0.11, -0.02); chair.add(post);
+
+const J = makeChara();
+scene.add(J.root);
+
+// ---- poses ----
+let pose = "typing";
+function applyPose(t) {
+  const r = (g, x = 0, y = 0, z = 0) => g.rotation.set(x, y, z);
+  const breathe = Math.sin(t * 1.8) * 0.006;
+  if (pose === "stand") {
+    J.root.position.set(0.55, 0, 0.05); J.root.rotation.y = -0.35;
+    r(J.thighL); r(J.thighR); r(J.kneeL); r(J.kneeR);
+    r(J.chest, 0, 0, 0);
+    r(J.shL, 0, 0, -0.12 + Math.sin(t * 1.6) * 0.02); r(J.shR, 0, 0, 0.12 - Math.sin(t * 1.6) * 0.02);
+    r(J.elL, -0.15); r(J.elR, -0.15);
+    r(J.neck); r(J.head, 0.04, Math.sin(t * 0.5) * 0.15, Math.sin(t * 0.9) * 0.04);
+  } else {
+    J.root.position.set(0, 0.0, -0.02); J.root.rotation.y = 0;
+    const swing = Math.sin(t * 2.2) * 0.12;
+    r(J.thighL, -1.5, 0, 0.05); r(J.thighR, -1.5, 0, -0.05);
+    r(J.kneeL, 1.35 + swing); r(J.kneeR, 1.35 - swing);
+    r(J.chest, 0.06);
+    if (pose === "typing") {
+      const a = Math.sin(t * 13) * 0.07, b = Math.sin(t * 13 + 1.9) * 0.07;
+      r(J.shL, -0.75, 0, 0.18); r(J.shR, -0.75, 0, -0.18);
+      r(J.elL, -0.95 + a, 0, -0.15); r(J.elR, -0.95 + b, 0, 0.15);
+      r(J.neck, 0.12); r(J.head, 0.1 + Math.sin(t * 0.8) * 0.02, 0, Math.sin(t * 0.6) * 0.03);
+    } else {
+      r(J.shL, -0.25, 0, -0.08); r(J.shR, -0.25, 0, 0.08);
+      r(J.elL, -0.9, 0, -0.2); r(J.elR, -0.9, 0, 0.2);
+      r(J.neck, 0.02); r(J.head, -0.02, Math.sin(t * 0.45) * 0.25, Math.sin(t * 0.8) * 0.06);
+    }
+  }
+  J.hips.position.y = 0.295 + breathe * 0.3;
+  J.chest.scale.y = 1 + breathe;
+  // braids sway a little
+  J.braidL.rotation.set(Math.sin(t * 1.3) * 0.05, 0, -0.05); J.braidR.rotation.set(Math.sin(t * 1.3 + 1) * 0.05, 0, 0.05);
+}
+
+// ---- post ----
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.9, 0.5, 0.97);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); composer.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(stage);
+
+const clock = new THREE.Clock();
+let blinkT = 2;
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  applyPose(t);
+  blinkT -= dt;
+  const closed = blinkT < 0.12;
+  J.eyes.forEach(e => { e.scale.y = closed ? 0.003 : 0.0185; });
+  if (blinkT < 0) blinkT = 2 + Math.random() * 3;
+  controls.update();
+  composer.render();
+  requestAnimationFrame(frame);
+}
+
+document.querySelectorAll("[data-pose]").forEach(b => b.addEventListener("click", () => {
+  pose = b.dataset.pose;
+  if (pose === "stand") { controls.target.set(0.5, 0.42, 0.05); camera.position.set(1.6, 0.85, 1.75); }
+  else { controls.target.set(0.05, 0.45, 0); camera.position.set(0.95, 0.95, 1.55); }
+  document.querySelectorAll("[data-pose]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+}));
+const glow = document.getElementById("glow"), glowVal = document.getElementById("glowVal");
+glow.addEventListener("input", () => { bloom.strength = Number(glow.value); glowVal.textContent = bloom.strength.toFixed(2); });
+const line = document.getElementById("line"), lineVal = document.getElementById("lineVal");
+line.addEventListener("input", () => { outlineUniforms.thickness.value = Number(line.value); lineVal.textContent = Math.round(Number(line.value) * 1000); });
+
+window.__view = { camera, controls };
+resize();
+requestAnimationFrame(frame);
+</script>
