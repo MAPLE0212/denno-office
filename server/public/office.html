@@ -236,7 +236,7 @@ function applyState(s) {
     } else {
       const t = document.createElement("div");
       t.className = "away";
-      t.textContent = `${m.name} 不在`;
+      t.textContent = m.back ? `${m.name} 不在・${m.back} 戻り` : `${m.name} 不在`;
       seat.pin.replaceChildren(t);
       seat.anchor = seat.chair;
     }

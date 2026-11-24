@@ -30,7 +30,16 @@
 .now { min-height: 54px; display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .now .left { font-size: 12px; color: var(--muted); padding-bottom: 4px; }
 .now .empty { color: var(--muted); font-size: 13px; }
-.presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.presets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.presets .pgroup { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.presets .plabel { font-size: 11px; color: var(--muted); min-width: 4.5em; }
+.orig { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.orig h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.orig .list { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 10px; }
+.orig .list .chip { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
+.orig .list .chip button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; line-height: 1; }
+.orig .list .chip button:hover { color: var(--danger); }
+.back { font-size: 13px; color: var(--ok); margin-top: 6px; }
 .inputrow { display: flex; gap: 8px; align-items: stretch; }
 .inputrow input {
   flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--panel-2);
@@ -145,6 +154,7 @@
             <span class="knob" aria-hidden="true"></span><span id="presenceLabel">不在</span>
           </button>
         </div>
+        <p class="back" id="backHint" hidden></p>
         <p class="hint" id="resetHint"></p>
       </div>
     </section>
@@ -168,6 +178,15 @@
         </div>
       </div>
       <p class="hint">StopWatch の吹き出しに見えるのは先頭5文字くらいです。不在のあいだは吹き出しは出ません。</p>
+      <div class="orig">
+        <h3>オリジナル</h3>
+        <div class="list" id="origList"></div>
+        <div class="inputrow">
+          <input id="origText" type="text" placeholder="自分の定型文を足す" autocomplete="off" aria-label="オリジナルの文">
+          <button class="btn" id="origAdd">足す</button>
+        </div>
+        <p class="hint" id="origHint"></p>
+      </div>
     </section>
 
     <section class="card">
@@ -265,6 +284,8 @@ function renderMine() {
   $("presence").setAttribute("aria-pressed", String(m.present));
   $("presenceLabel").textContent = m.present ? "在席中" : "不在";
   $("resetHint").textContent = `押し忘れても、毎晩 ${state.resetAt} に自動で不在に戻ります。`;
+  $("backHint").hidden = m.present || !m.back;
+  $("backHint").textContent = m.back ? `${m.back} に戻る予定` : "";
 
   const now = $("now");
   if (m.comment) {
@@ -285,14 +306,47 @@ function renderMine() {
   }
   $("clear").disabled = !m.comment;
 
-  if (!$("presets").childElementCount) {
-    $("presets").replaceChildren(...state.presets.map((p) => {
-      const c = document.createElement("button");
+  // 定型文（見出しごと）。オリジナルが変わったら並べ直す
+  const origs = m.originals || [];
+  const groups = [...(state.presetGroups || [{ label: "", items: state.presets }])];
+  if (origs.length) groups.push({ label: "オリジナル", items: origs });
+  const key = JSON.stringify(groups);
+  if ($("presets").dataset.key !== key) {
+    $("presets").dataset.key = key;
+    $("presets").replaceChildren(...groups.map((g) => {
+      const row = document.createElement("div");
+      row.className = "pgroup";
+      if (g.label) {
+        const h = document.createElement("span");
+        h.className = "plabel";
+        h.textContent = g.label;
+        row.append(h);
+      }
+      row.append(...g.items.map((p) => {
+        const c = document.createElement("button");
+        c.className = "chip";
+        c.textContent = p;
+        c.addEventListener("click", () => { $("text").value = p; updateCount(); $("text").focus(); });
+        return c;
+      }));
+      return row;
+    }));
+    $("origList").replaceChildren(...origs.map((p, k) => {
+      const c = document.createElement("span");
       c.className = "chip";
-      c.textContent = p;
-      c.addEventListener("click", () => { $("text").value = p; updateCount(); $("text").focus(); });
+      const t = document.createElement("span");
+      t.textContent = p;
+      const x = document.createElement("button");
+      x.textContent = "×";
+      x.setAttribute("aria-label", `「${p}」を消す`);
+      x.addEventListener("click", () => send({ originals: origs.filter((_, j) => j !== k) }, "オリジナルを消しました"));
+      c.append(t, x);
       return c;
     }));
+    const max = state.originalsMax || 10;
+    $("origHint").textContent = `${origs.length}/${max} 個。ここに足した文は、上の定型文と Dial の「オリジナル」（星）に出ます。`;
+  }
+  if (!$("durations").childElementCount) {
     $("durations").replaceChildren(...state.durations.map((d) => {
       const b = document.createElement("button");
       b.textContent = d.label;
@@ -425,6 +479,15 @@ $("send").addEventListener("click", async () => {
   if (await send({ comment: { text, duration } }, "ひとりごとを出しました")) { $("text").value = ""; updateCount(); }
 });
 $("clear").addEventListener("click", () => send({ comment: null }, "ひとりごとを消しました"));
+async function addOriginal() {
+  const text = $("origText").value.replace(/\s+/g, " ").trim();
+  if (!text) return;
+  const max = state.commentMax || 20;
+  if ([...text].length > max) { Denno.toast(`${max}文字までです`, true); return; }
+  if (await send({ originals: [...(me().originals || []), text] }, "オリジナルを足しました")) $("origText").value = "";
+}
+$("origAdd").addEventListener("click", addOriginal);
+$("origText").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addOriginal(); });
 
 async function loadCharacters() {
   try { characters = await (await fetch("/api/characters")).json(); } catch {}

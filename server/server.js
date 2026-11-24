@@ -33,7 +33,15 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 // メンバーは members.json（自分のオフィス用。無ければ members.example.json のサンプル）
 const MEMBERS_FILE = ["members.json", "members.example.json"].map((f) => path.join(__dirname, f)).find((f) => fs.existsSync(f));
 const MEMBERS = JSON.parse(fs.readFileSync(MEMBERS_FILE, "utf8"));
-const PRESETS = ["集中モード", "寒い…", "暑い…", "午後から会議", "話しかけOK", "休憩中", "おなかすいた"];
+// ひとりごとの定型文（マイページで見出しごとに並ぶ。気温・予定・声かけは Dial のジャンルと同じ文）
+const PRESET_GROUPS = [
+  { label: "いま", items: ["集中モード", "休憩中", "会議中"] },
+  { label: "気温", items: ["寒い", "ちょっと寒い", "ちょっと暑い", "暑い"] },
+  { label: "予定", items: ["午後から会議", "定時で帰ります", "明日はお休み"] },
+  { label: "声かけ", items: ["話しかけOK", "手が空いてます", "雑談したい", "あとで返事します"] },
+];
+const PRESETS = PRESET_GROUPS.flatMap((g) => g.items);
+const ORIGINALS_MAX = 10; // オリジナル（マイページで登録する自分の定型文）の数
 const DURATIONS = [
   { id: "30m", label: "30分" },
   { id: "2h", label: "2時間" },
@@ -296,7 +304,8 @@ function bakeMissing() {
 // ---------- 状態 ----------
 
 function freshMember() {
-  return { present: false, comment: null, character: null, updatedAt: null };
+  // back: 戻る時刻 "HH:MM"（不在タグに出す。在席に戻るか夜のリセットで消える） / originals: オリジナルの定型文
+  return { present: false, comment: null, back: null, originals: [], character: null, updatedAt: null };
 }
 
 function loadState() {
@@ -340,6 +349,16 @@ function nextResetBoundary(now) {
   return d.getTime();
 }
 
+// "HH:MM" → now より後でいちばん近いその時刻（ms）。形がおかしければ null
+function clockToTime(hhmm, now) {
+  const mt = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!mt || +mt[1] > 23 || +mt[2] > 59) return null;
+  const d = new Date(now);
+  d.setHours(+mt[1], +mt[2], 0, 0);
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
 function commentUntil(duration, now) {
   if (duration === "30m") return now + 30 * 60 * 1000;
   if (duration === "2h") return now + 2 * 60 * 60 * 1000;
@@ -356,6 +375,7 @@ function tick(now = Date.now()) {
   if (state.lastResetAt < boundary) {
     for (const m of Object.values(state.members)) {
       if (m.present) { m.present = false; changed = true; }
+      if (m.back) { m.back = null; changed = true; }
     }
     state.lastResetAt = boundary;
     save();
@@ -371,6 +391,8 @@ function publicState() {
     resetAt: RESET_AT,
     commentMax: COMMENT_MAX,
     presets: PRESETS,
+    presetGroups: PRESET_GROUPS,
+    originalsMax: ORIGINALS_MAX,
     durations: DURATIONS,
     members: MEMBERS.map((info) => {
       const m = state.members[info.id];
@@ -379,6 +401,8 @@ function publicState() {
         ...info,
         present: m.present,
         comment: m.comment,
+        back: m.back,
+        originals: m.originals,
         character: c ? { id: c.id, label: c.label, image: c.image } : null,
         updatedAt: m.updatedAt,
       };
@@ -405,9 +429,29 @@ function applyPatch(id, body) {
       const text = String((body.comment && body.comment.text) || "").replace(/\s+/g, " ").trim();
       if (!text) return [400, "ひとりごとが空です"];
       if ([...text].length > COMMENT_MAX) return [400, `ひとりごとは${COMMENT_MAX}文字まで`];
-      const duration = DURATIONS.some((d) => d.id === body.comment.duration) ? body.comment.duration : "2h";
-      next.comment = { text, duration, until: commentUntil(duration, now), at: now };
+      // until: "HH:MM"（Dial の 集中 〜15:30 など。その時刻に消える）。無ければ duration
+      const at = "until" in body.comment ? clockToTime(body.comment.until, now) : null;
+      if ("until" in body.comment && !at) return [400, "until は HH:MM"];
+      const duration = at ? "until" : DURATIONS.some((d) => d.id === body.comment.duration) ? body.comment.duration : "2h";
+      next.comment = { text, duration, until: at || commentUntil(duration, now), at: now };
     }
+  }
+  if ("back" in body) {
+    if (body.back === null) next.back = null;
+    else if (clockToTime(body.back, now)) next.back = String(body.back).padStart(5, "0");
+    else return [400, "back は HH:MM"];
+  }
+  if ("originals" in body) {
+    if (!Array.isArray(body.originals)) return [400, "originals は文の配列"];
+    const list = [];
+    for (const o of body.originals) {
+      const text = String(o || "").replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      if ([...text].length > COMMENT_MAX) return [400, `オリジナルは${COMMENT_MAX}文字まで`];
+      if (!list.includes(text)) list.push(text);
+    }
+    if (list.length > ORIGINALS_MAX) return [400, `オリジナルは${ORIGINALS_MAX}個まで`];
+    next.originals = list;
   }
   if ("character" in body) {
     if (body.character === null) {
@@ -419,6 +463,7 @@ function applyPatch(id, body) {
       next.character = c.id;
     }
   }
+  if (next.present ?? m.present) next.back = null; // 在席なら戻り時刻はいらない
   Object.assign(m, next, { updatedAt: now });
   save();
   broadcast();
@@ -479,6 +524,9 @@ const server = http.createServer(async (req, res) => {
   // StopWatch 用：JSON を読まずに済むよう、1行1席のタブ区切りテキストで返す
   //   席 \t id \t 在席(1/0) \t 名前 \t ひとりごと \t キャラ \t はんこの版（0 = まだ焼いていない）
   //   ?board=dial のときは Dial 用のはんこの版（Dial 用が無ければ 0 にして、端末はファームの絵で描く）
+  //   8列目は戻る時刻（"16:00"、無ければ空）。席の行のあとに、席と関係ない行を足す（古いファームは読み飛ばす）
+  //     #now \t サーバの時計（その日の 0 時からの秒）
+  //     #o \t 席 \t オリジナルの文（1つ1行）
   if (p === "/api/device" && req.method === "GET") {
     tick();
     const clean = (s) => String(s || "").replace(/[\t\r\n]+/g, " ");
@@ -487,8 +535,11 @@ const server = http.createServer(async (req, res) => {
     const ver = (cid) => (!cid || (dial && !hasDialSprites(cid)) ? 0 : spriteVersion(cid));
     const lines = publicState().members.map((m) => {
       const cid = displayCharacter(m, ids);
-      return [m.seat, m.id, m.present ? 1 : 0, clean(m.name), clean(m.comment && m.comment.text), cid, ver(cid)].join("\t");
+      return [m.seat, m.id, m.present ? 1 : 0, clean(m.name), clean(m.comment && m.comment.text), cid, ver(cid), clean(m.back)].join("\t");
     });
+    const d = new Date();
+    lines.push(`#now\t${d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()}`);
+    for (const m of publicState().members) for (const o of m.originals || []) lines.push(`#o\t${m.seat}\t${clean(o)}`);
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
     return res.end(lines.join("\n") + "\n");
   }

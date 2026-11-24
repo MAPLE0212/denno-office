@@ -18,9 +18,10 @@
 //
 // 操作
 //   つまみを回す  : 操作する席を選ぶ（島のまわりを時計回り）
-//   つまみを押す  : 選択中の席のコメント（定型文）を順送り
+//   つまみを押す  : 選択中の席の「ひとこと選び」を開く（下の「ひとこと選び」）
 //   つまみを長押し: 選択中の席の 在席 / 不在 を切り替え
 //   画面タップ    : タップした席の 在席 / 不在 を切り替え
+//   画面を長押し  : 長押しした席の「ひとこと選び」を開く
 //   シリアル(115200): "p 3" 席3の在席切替 / "c 3 寒い…" 席3にコメント / "c 3" 席3のコメントを消す
 #include <M5Unified.h>
 #include <WiFi.h>
@@ -52,25 +53,29 @@ struct SeatState {
   String name;
   bool present;
   String comment;
-  int presetIdx;
   uint32_t nextBlink;
   int blinkLeft;
   String id;            // サーバ上のメンバー id（最初の同期で入る）
   uint32_t localUntil;  // 端末で変えた直後はサーバの古い状態で上書きしない
   DynArt* art;          // 取り寄せたはんこ（nullptr ならファームに入っている絵）
+  String back;          // 戻る時刻（"16:00"。不在タグに出す）
 };
 
 // 名前とコメントはサンプル（サーバにつながると置き換わる）
 static SeatState S[6] = {
-  {"A1", "佐藤", true, "午後から会議", 4, 0, 0},
-  {"A2", "鈴木", true, "", 0, 0, 0},
-  {"A3", "高橋", false, "", 0, 0, 0},
-  {"B1", "田中", true, "寒い…", 2, 0, 0},
-  {"B2", "伊藤", false, "", 0, 0, 0},
-  {"B3", "渡辺", true, "集中モード", 1, 0, 0},
+  {"A1", "佐藤", true, "午後から会議"},
+  {"A2", "鈴木", true, ""},
+  {"A3", "高橋", false, ""},
+  {"B1", "田中", true, "寒い"},
+  {"B2", "伊藤", false, ""},
+  {"B3", "渡辺", true, "集中 〜17:00"},
 };
-static const char* PRESETS[] = {"", "集中モード", "寒い…", "暑い…", "午後から会議", "話しかけOK"};
-static const int PRESET_N = sizeof(PRESETS) / sizeof(PRESETS[0]);
+static const int ORIG_MAX = 10;
+static String orig[6][ORIG_MAX];  // 席ごとのオリジナル（マイページで登録した文。/api/device の #o 行）
+static int origN[6];
+// サーバの時計（/api/device の #now 行）。まだ届いていなければ 12:00 から数える
+static int32_t srvSec = -1;
+static uint32_t srvAt = 0;
 
 // 吹き出しの置き場所（席ごとに決め打ち）。cx, top : 箱の中心xと上端 / tx, ty : しっぽの先
 // コメントだけを1行で出す（名前は画面下と不在タグに出す）。箱の幅は文字に合わせ、円からはみ出すぶんは内側へ寄せる
@@ -437,7 +442,20 @@ static void netTask(void*) {
   }
 }
 
-// 届いた状態を席に反映（画面側で呼ぶ）。1行 = 席 \t id \t 在席 \t 名前 \t ひとりごと
+// タブ区切りの1行を n 個に分ける（最後の1個は行の残り全部）
+static void splitTabs(const String& line, String* f, int n) {
+  int start = 0;
+  for (int k = 0; k < n; k++) {
+    int t = k < n - 1 ? line.indexOf('\t', start) : -1;
+    if (t < 0) t = line.length();
+    f[k] = start <= (int)line.length() ? line.substring(start, t) : String("");
+    start = t + 1;
+  }
+}
+
+// 届いた状態を席に反映（画面側で呼ぶ）
+//   席の行 = 席 \t id \t 在席 \t 名前 \t ひとりごと \t キャラ \t 版 \t 戻る時刻（キャラ・版は syncArt が見る）
+//   #now \t サーバの時計（0 時からの秒） / #o \t 席 \t オリジナルの文
 static void applyInbox() {
   String body;
   xSemaphoreTake(netLock, portMAX_DELAY);
@@ -446,20 +464,23 @@ static void applyInbox() {
   if (body.length() == 0) return;
 
   uint32_t now = millis();
+  int newN[6] = {0};
   int pos = 0;
   while (pos < (int)body.length()) {
     int nl = body.indexOf('\n', pos);
     if (nl < 0) nl = body.length();
     String line = body.substring(pos, nl);
     pos = nl + 1;
-    String f[5];  // 6・7列目（キャラ・版）は syncArt が見る
-    int start = 0;
-    for (int k = 0; k < 5; k++) {
-      int t = line.indexOf('\t', start);
-      if (t < 0) t = line.length();
-      f[k] = line.substring(start, t);
-      start = t + 1;
+    if (line.startsWith("#now\t")) { srvSec = line.substring(5).toInt(); srvAt = now; continue; }
+    if (line.startsWith("#o\t")) {
+      String f[3];
+      splitTabs(line, f, 3);
+      for (int i = 0; i < 6; i++)
+        if (f[1] == S[i].code && newN[i] < ORIG_MAX) orig[i][newN[i]++] = f[2];
+      continue;
     }
+    String f[8];
+    splitTabs(line, f, 8);
     for (int i = 0; i < 6; i++) {
       if (f[0] != S[i].code) continue;
       S[i].id = f[1];
@@ -467,8 +488,10 @@ static void applyInbox() {
       if ((int32_t)(now - S[i].localUntil) < 0) continue;  // 端末で変えた直後
       S[i].present = f[2] == "1";
       S[i].comment = f[4];
+      S[i].back = f[7];
     }
   }
+  for (int i = 0; i < 6; i++) origN[i] = newN[i];
 }
 
 // ---------- 描画 ----------
@@ -546,8 +569,11 @@ static void drawTag(const String& t, int cx, int y, uint16_t bg, uint16_t fg, bo
   canvas.drawString(t, x + tw / 2, y + 8);
 }
 
+// 戻る時刻があれば「田中 16:00戻り」（緑の字）、なければ「田中 不在」
 static void drawAwayTag(int i) {
-  drawTag(S[i].name + " 不在", SEATS[i].chairX, SEATS[i].chairY - 8, C565(20, 26, 44), C565(150, 160, 190), i == selected);
+  bool back = S[i].back.length() > 0;
+  drawTag(S[i].name + (back ? " " + S[i].back + "戻り" : String(" 不在")), SEATS[i].chairX, SEATS[i].chairY - 8,
+          C565(20, 26, 44), back ? C565(126, 224, 184) : C565(150, 160, 190), i == selected);
 }
 
 static void drawSelection() {
@@ -615,7 +641,7 @@ static void handleSerial() {
 // ---------- つまみ（ロータリーエンコーダ） ----------
 // A/B 2 本の信号の変化を割り込みで数える。1 カチッで 4 つ進む（ENC_STEP）
 // 実機で「1 カチッで 2 席動く / 2 カチッで 1 席」なら ENC_STEP を、向きが逆なら ENC_A と ENC_B を入れ替える
-static const int ENC_A = 41, ENC_B = 40;
+static const int ENC_A = 40, ENC_B = 41;  // 実機で右回りが逆だったので入れ替えた
 static const int ENC_STEP = 4;
 static volatile int32_t encCount = 0;
 static volatile uint8_t encPrev = 0;
@@ -644,24 +670,458 @@ static int encSteps() {
   return d;
 }
 
-static void handleDial() {
+// ---------- ひとこと選び ----------
+// 出荷時デモ（M5Dial-UserDemo）の見た目に合わせた 3 つの画面
+//   ジャンル : 黒い画面のふちに 10 個の丸いアイコン。回すと内側の白い点が動き、真ん中に名前（ランチャー風）
+//   時間     : ジャンルの色の画面に白い箱、大きな数字（明るさ設定風）
+//   文       : 黒い画面に縦の一覧。選んでいる文はオレンジのバー（MORE メニュー風）
+// 決める : つまみを押す / 画面の真ん中をタップ
+// もどる : つまみを長押し / 画面のどこでも長押し / 下の「<」をタップ
+enum Mode { M_OFFICE, M_GENRE, M_VALUE, M_LIST };
+enum Kind { K_UNTIL, K_AFTER, K_BACK, K_LIST, K_CLEAR };
+struct Genre {
+  const char* name;
+  uint32_t color;
+  uint8_t kind;
+  int16_t step, lo, hi, def;  // 時間のジャンル：つまみ1カチッの分、いちばん短い・長い、はじめの値（分）
+  const char* const* items;   // 文のジャンル：一覧（nullptr ならオリジナル）
+  uint8_t nItems;
+  const char* duration;       // 文のジャンル：消えるまで（サーバの "2h" / "today"）
+};
+static const char* const TEMP_ITEMS[] = {"寒い", "ちょっと寒い", "ちょっと暑い", "暑い"};
+static const char* const PLAN_ITEMS[] = {"午後から会議", "定時で帰ります", "明日はお休み"};
+static const char* const TALK_ITEMS[] = {"話しかけOK", "手が空いてます", "雑談したい", "あとで返事します"};
+static const int GN = 10;
+static const Genre GEN[GN] = {
+  {"集中", 0xFD5C4C, K_UNTIL, 15, 15, 240, 60},
+  {"休憩", 0xEB8429, K_UNTIL, 5, 5, 60, 10},
+  {"会議", 0x577EFF, K_UNTIL, 15, 15, 180, 60},
+  {"外出", 0x03A964, K_AFTER, 5, 5, 120, 10},
+  {"戻り", 0x0B8F6A, K_BACK, 15, 15, 720, 60},
+  {"気温", 0x008CD6, K_LIST, 0, 0, 0, 0, TEMP_ITEMS, 4, "2h"},
+  {"予定", 0x5D7BA2, K_LIST, 0, 0, 0, 0, PLAN_ITEMS, 3, "today"},
+  {"声かけ", 0x1AA198, K_LIST, 0, 0, 0, 0, TALK_ITEMS, 4, "2h"},
+  {"オリジナル", 0xD9A21B, K_LIST, 0, 0, 0, 0, nullptr, 0, "2h"},
+  {"消す", 0x6B6F7A, K_CLEAR},
+};
+
+static Mode mode = M_OFFICE;
+static int hSeat = 0;               // ひとことを出す席
+static int gSel = 0;                // 選んでいるジャンル
+static float gAng = -90, gVel = 0;  // 白い点の角度（ばねで追いかけ、少し行き過ぎて戻る）
+static int vVal = 0;                // 時間の値（分。戻りはその日の 0 時からの分）
+static int lSel = 0;
+static float lPos = 0;              // 一覧のスクロール位置（なめらかに追いかける）
+static uint32_t menuIdle = 0;
+static const uint32_t MENU_IDLE_MS = 20000;  // さわらなければ島の画面に戻る
+static const uint32_t MENU_TICK_MS = 30;
+
+static uint16_t hex565(uint32_t c) { return C565(c >> 16, (c >> 8) & 255, c & 255); }
+static uint16_t white() { return C565(255, 255, 255); }
+static uint16_t cream() { return C565(243, 233, 210); }
+
+// 時計はサーバの時計（srvSec。まだ届いていなければ 12:00 から数える）
+static int nowMin() {
+  if (srvSec < 0) return (12 * 60 + millis() / 60000) % 1440;
+  return (int)((srvSec + (millis() - srvAt) / 1000) / 60) % 1440;
+}
+static String hhmm(int m) {
+  m = ((m % 1440) + 1440) % 1440;
+  char b[8];
+  snprintf(b, sizeof(b), "%d:%02d", m / 60, m % 60);
+  return b;
+}
+
+static void sendText(int i, const String& text, const String& extra) {
+  enqueue(i, "{\"comment\":{\"text\":" + jsonStr(text) + "," + extra + "}}");
+}
+
+// ---- アイコン（42px くらいの丸の中に白で描く。s = 1 で約 22px） ----
+static void drawIcon(int id, int cx, int cy, float s, uint16_t fg, uint16_t bg) {
+  auto X = [&](float u) { return (int)lroundf(cx + u * s); };
+  auto Y = [&](float u) { return (int)lroundf(cy + u * s); };
+  auto R = [&](float u) { return max(1, (int)lroundf(u * s)); };
+  switch (id) {
+    case 0:  // 集中：ヘッドホン
+      canvas.fillArc(X(0), Y(1), R(10), R(8), 180, 360, fg);
+      canvas.fillRoundRect(X(-11), Y(0), R(5), R(10), R(2), fg);
+      canvas.fillRoundRect(X(6), Y(0), R(5), R(10), R(2), fg);
+      break;
+    case 1:  // 休憩：カップ
+      canvas.fillCircle(X(5), Y(2), R(5), fg);
+      canvas.fillCircle(X(5), Y(2), R(2.5f), bg);
+      canvas.fillRoundRect(X(-9), Y(-3), R(14), R(12), R(3), fg);
+      canvas.drawWideLine(X(-5), Y(-10), X(-5), Y(-6), s * 0.9f, fg);
+      canvas.drawWideLine(X(0), Y(-10), X(0), Y(-6), s * 0.9f, fg);
+      break;
+    case 2:  // 会議：人たち
+      canvas.fillCircle(X(5), Y(-5), R(3.5f), fg);
+      canvas.fillArc(X(5), Y(8), R(8), 0, 180, 360, fg);
+      canvas.fillCircle(X(-3), Y(-3), R(5.5f), bg);
+      canvas.fillCircle(X(-3), Y(-3), R(4), fg);
+      canvas.fillArc(X(-3), Y(10), R(10.5f), 0, 180, 360, bg);
+      canvas.fillArc(X(-3), Y(10), R(9), 0, 180, 360, fg);
+      break;
+    case 3:  // 外出：歩く人
+      canvas.fillCircle(X(2), Y(-9), R(2.8f), fg);
+      canvas.drawWideLine(X(1), Y(-5), X(-1), Y(3), s * 1.5f, fg);
+      canvas.drawWideLine(X(-1), Y(3), X(-5), Y(10), s * 1.3f, fg);
+      canvas.drawWideLine(X(-1), Y(3), X(3), Y(6), s * 1.3f, fg);
+      canvas.drawWideLine(X(3), Y(6), X(4), Y(10), s * 1.3f, fg);
+      canvas.drawWideLine(X(1), Y(-4), X(-4), Y(0), s * 1.1f, fg);
+      canvas.drawWideLine(X(1), Y(-4), X(6), Y(-1), s * 1.1f, fg);
+      break;
+    case 4:  // 戻り：戻る矢印
+      canvas.drawWideLine(X(-5), Y(-5), X(3), Y(-5), s * 1.4f, fg);
+      canvas.fillArc(X(3), Y(1), R(7.4f), R(4.6f), 270, 360, fg);
+      canvas.fillArc(X(3), Y(1), R(7.4f), R(4.6f), 0, 90, fg);
+      canvas.drawWideLine(X(3), Y(7), X(-4), Y(7), s * 1.4f, fg);
+      canvas.fillTriangle(X(-11), Y(-5), X(-5), Y(-11), X(-5), Y(1), fg);
+      break;
+    case 5:  // 気温：温度計
+      canvas.fillRoundRect(X(-3), Y(-11), R(6), R(16), R(3), fg);
+      canvas.fillCircle(X(0), Y(6), R(5), fg);
+      canvas.fillRoundRect(X(-1), Y(-9), R(2), R(7), R(1), bg);
+      break;
+    case 6:  // 予定：カレンダー
+      canvas.fillRoundRect(X(-9), Y(-7), R(18), R(17), R(3), fg);
+      canvas.fillRect(X(-7), Y(-1), R(14), R(9), bg);
+      for (int r = 0; r < 2; r++)
+        for (int c = 0; c < 3; c++) canvas.fillRect(X(-6 + c * 4.5f), Y(0.5f + r * 4), R(3), R(2.5f), fg);
+      canvas.fillRoundRect(X(-6), Y(-11), R(3), R(6), R(1), fg);
+      canvas.fillRoundRect(X(3), Y(-11), R(3), R(6), R(1), fg);
+      break;
+    case 7:  // 声かけ：吹き出し
+      canvas.fillCircle(X(0), Y(-1), R(10), fg);
+      canvas.fillTriangle(X(-7), Y(4), X(-10), Y(11), X(-1), Y(8), fg);
+      for (int k = -1; k <= 1; k++) canvas.fillCircle(X(k * 4.5f), Y(-1), R(1.6f), bg);
+      break;
+    case 8: {  // オリジナル：星
+      float ox[5], oy[5], ix[5], iy[5];
+      for (int k = 0; k < 5; k++) {
+        float a = (-90 + 72 * k) * DEG_TO_RAD, b = (-54 + 72 * k) * DEG_TO_RAD;
+        ox[k] = X(11 * cosf(a)); oy[k] = Y(1 + 11 * sinf(a));
+        ix[k] = X(4.6f * cosf(b)); iy[k] = Y(1 + 4.6f * sinf(b));
+      }
+      for (int k = 0; k < 5; k++) {
+        canvas.fillTriangle(X(0), Y(1), ox[k], oy[k], ix[k], iy[k], fg);
+        canvas.fillTriangle(X(0), Y(1), ox[k], oy[k], ix[(k + 4) % 5], iy[(k + 4) % 5], fg);
+      }
+      break;
+    }
+    case 9: {  // 消す：消しゴム（ななめの箱）
+      float c = 0.7071f;
+      auto P = [&](float u, float v, int& px, int& py) {  // 箱の座標 (u: 長さ, v: 幅) → 画面
+        px = X(u * c - v * c);
+        py = Y(-1 + u * -c - v * c);
+      };
+      int x0, y0, x1, y1, x2, y2, x3, y3;
+      P(-9, -4.5f, x0, y0); P(9, -4.5f, x1, y1); P(9, 4.5f, x2, y2); P(-9, 4.5f, x3, y3);
+      canvas.fillTriangle(x0, y0, x1, y1, x2, y2, fg);
+      canvas.fillTriangle(x0, y0, x2, y2, x3, y3, fg);
+      int a0, b0, a1, b1;
+      P(-3, -4.5f, a0, b0); P(-3, 4.5f, a1, b1);
+      canvas.drawWideLine(a0, b0, a1, b1, s * 0.9f, bg);
+      canvas.drawWideLine(X(-1), Y(11), X(10), Y(11), s * 0.9f, fg);
+      break;
+    }
+  }
+}
+
+// ---- 画面 ----
+static void iconPos(int i, int& x, int& y) {
+  float a = (-90 + i * 36) * DEG_TO_RAD;
+  x = 120 + (int)lroundf(95 * cosf(a));
+  y = 120 + (int)lroundf(95 * sinf(a));
+}
+
+static void renderGenre() {
+  canvas.fillScreen(TFT_BLACK);
+  float diff = (-90 + gSel * 36) - gAng;
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+  gVel = gVel * 0.55f + diff * 0.25f;
+  gAng += gVel;
+
+  for (int i = 0; i < GN; i++) {
+    int x, y;
+    iconPos(i, x, y);
+    bool on = i == gSel;
+    uint16_t c = hex565(GEN[i].color);
+    canvas.fillSmoothCircle(x, y, on ? 25 : 21, c);
+    drawIcon(i, x, y, on ? 1.15f : 1.0f, white(), c);
+  }
+  float a = gAng * DEG_TO_RAD;
+  canvas.fillSmoothCircle(120 + 58 * cosf(a), 120 + 58 * sinf(a), 5, cream());
+
+  // 名前は白い点のほうへ少し寄せる（デモと同じ）。長い名前は点に重ならないよう真ん中に置き、字も少し小さく
+  bool longName = strlen(GEN[gSel].name) > 9;
+  int tx = longName ? 120 : 120 + 8 * cosf(a), ty = longName ? 120 : 120 + 8 * sinf(a);
+  canvas.setTextDatum(middle_center);
+  canvas.setFont(longName ? &fonts::lgfxJapanGothic_20 : &fonts::lgfxJapanGothic_24);
+  canvas.setTextColor(cream());
+  canvas.drawString(GEN[gSel].name, tx, ty - 6);
+  canvas.setFont(&fonts::lgfxJapanGothic_12);
+  canvas.setTextColor(C565(130, 136, 150));
+  canvas.drawString(String(S[hSeat].code) + " " + S[hSeat].name, tx, ty + 18);
+}
+
+static void drawBack(uint16_t c) {
+  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(c);
+  canvas.drawString("<", 120, 218);
+}
+
+// 時間の画面に出す「大きな数字・単位・下の説明」
+static void valueText(String& num, String& unit, String& label) {
+  const Genre& g = GEN[gSel];
+  int now = nowMin();
+  if (g.kind == K_UNTIL) { num = String(vVal); unit = "分"; label = "〜" + hhmm(now + vVal) + " まで"; }
+  if (g.kind == K_AFTER) { num = String(vVal); unit = "分後"; label = hhmm(now + vVal) + " に外出"; }
+  if (g.kind == K_BACK) { num = hhmm(vVal); unit = ""; label = "に戻ります"; }
+}
+
+static void renderValue() {
+  const Genre& g = GEN[gSel];
+  uint16_t c = hex565(g.color);
+  canvas.fillScreen(c);
+  drawIcon(gSel, 120, 26, 1.15f, white(), c);
+  canvas.fillSmoothRoundRect(0, 50, 240, 140, 36, white());
+
+  String num, unit, label;
+  valueText(num, unit, label);
+  canvas.setFont(&fonts::FreeSansBold24pt7b);
+  int w1 = canvas.textWidth(num);
+  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  int w2 = unit.length() ? canvas.textWidth(unit) + 3 : 0;
+  int x0 = 120 - (w1 + w2) / 2;
+  canvas.setTextColor(c);
+  canvas.setTextDatum(baseline_left);
+  canvas.setFont(&fonts::FreeSansBold24pt7b);
+  canvas.drawString(num, x0, 118);
+  if (w2) {
+    canvas.setFont(&fonts::lgfxJapanGothic_20);
+    canvas.drawString(unit, x0 + w1 + 3, 116);
+  }
+  canvas.setTextDatum(middle_center);
+  canvas.setFont(&fonts::lgfxJapanGothic_16);
+  canvas.drawString(label, 120, 158);
+  // 指でも増やせるように、箱の左右に − と ＋
+  canvas.setFont(&fonts::lgfxJapanGothic_24);
+  canvas.setTextColor(C565(200, 204, 214));
+  canvas.drawString("-", 26, 108);
+  canvas.drawString("+", 214, 108);
+  drawBack(white());
+}
+
+static int listCount() { return GEN[gSel].items ? GEN[gSel].nItems : origN[hSeat]; }
+static String listItem(int i) { return GEN[gSel].items ? String(GEN[gSel].items[i]) : orig[hSeat][i]; }
+
+static void renderList() {
+  const Genre& g = GEN[gSel];
+  canvas.fillScreen(TFT_BLACK);
+  canvas.setTextDatum(middle_center);
+  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  canvas.setTextColor(hex565(g.color));
+  canvas.drawString(g.name, 120, 30);
+
+  int n = listCount();
+  if (n == 0) {
+    canvas.setFont(&fonts::lgfxJapanGothic_16);
+    canvas.setTextColor(C565(150, 156, 170));
+    canvas.drawString("マイページの", 120, 108);
+    canvas.drawString("「オリジナル」で足せます", 120, 132);
+    drawBack(C565(140, 140, 140));
+    return;
+  }
+  if (lSel >= n) lSel = n - 1;
+  lPos += (lSel * 32 - lPos) * 0.35f;
+
+  // 選んでいる文のバー（真ん中に固定。文がそこへ流れてくる）
+  String cur = listItem(lSel);
+  canvas.setFont(cur.length() > 27 ? &fonts::lgfxJapanGothic_16 : &fonts::lgfxJapanGothic_20);
+  int bw = min(196, (int)canvas.textWidth(cur) + 16);
+  canvas.fillSmoothRoundRect(26, 106, bw, 28, 5, C565(250, 112, 0));
+
+  canvas.setTextDatum(middle_left);
+  canvas.setClipRect(20, 46, 200, 164);
+  for (int i = 0; i < n; i++) {
+    float dy = i * 32 - lPos;
+    if (dy < -80 || dy > 90) continue;
+    String t = listItem(i);
+    float off = 120 - 120 * cosf(dy / 120);  // 丸い画面のふちに沿って右へずらす
+    int v = max(50, 255 - (int)fabsf(dy) * 2);
+    canvas.setFont(t.length() > 27 ? &fonts::lgfxJapanGothic_16 : &fonts::lgfxJapanGothic_20);
+    canvas.setTextColor(fabsf(dy) < 14 ? C565(5, 143, 255) : C565(v, v, v));  // バーの上は反転した色
+    canvas.drawString(t, 34 + (int)off, 120 + (int)dy);
+  }
+  canvas.clearClipRect();
+  drawBack(C565(140, 140, 140));
+}
+
+static void renderMenu() {
+  if (mode == M_GENRE) renderGenre();
+  else if (mode == M_VALUE) renderValue();
+  else renderList();
+  canvas.pushSprite(0, 0);
+}
+
+// ---- 操作 ----
+static void openMenu(int seat) {
+  hSeat = seat;
+  selected = seat;
+  mode = M_GENRE;
+  gAng = -90 + gSel * 36;
+  gVel = 0;
+  menuIdle = millis();
+}
+
+static void closeMenu() {
+  mode = M_OFFICE;
+  nameUntil = millis() + 1500;
+}
+
+// 押したアイコンの色の丸を、画面いっぱいまで広げる（デモのアプリを開くときと同じ）
+static void playOpen() {
+  int x, y;
+  iconPos(gSel, x, y);
+  uint16_t c = hex565(GEN[gSel].color);
+  for (int r = 30; r < 340; r += 40) {
+    canvas.fillSmoothCircle(x, y, r, c);
+    canvas.pushSprite(0, 0);
+  }
+}
+
+static void enterGenre() {
+  const Genre& g = GEN[gSel];
+  if (g.kind == K_CLEAR) {
+    S[hSeat].comment = "";
+    sendComment(hSeat);
+    closeMenu();
+    return;
+  }
+  playOpen();
+  if (g.kind == K_LIST) {
+    lSel = 0;
+    for (int i = 0; i < listCount(); i++) if (listItem(i) == S[hSeat].comment) lSel = i;
+    lPos = lSel * 32;
+    mode = M_LIST;
+  } else {
+    int now = nowMin();
+    vVal = g.kind == K_BACK ? ((now + g.def + 14) / 15) * 15 : g.def;
+    mode = M_VALUE;
+  }
+}
+
+static void turnValue(int d) {
+  const Genre& g = GEN[gSel];
+  if (g.kind == K_BACK) {
+    int now = nowMin();
+    int lo = ((now + g.lo + 14) / 15) * 15, hi = now + g.hi;
+    vVal = constrain(vVal + d * g.step, lo, hi);
+  } else {
+    vVal = constrain(vVal + d * g.step, (int)g.lo, (int)g.hi);
+  }
+}
+
+static void decide() {
+  const Genre& g = GEN[gSel];
+  SeatState& s = S[hSeat];
+  if (mode == M_GENRE) { enterGenre(); return; }
+  if (mode == M_VALUE) {
+    String t = hhmm(g.kind == K_BACK ? vVal : nowMin() + vVal);
+    if (g.kind == K_UNTIL) { s.comment = String(g.name) + " 〜" + t; sendText(hSeat, s.comment, "\"until\":\"" + t + "\""); }
+    if (g.kind == K_AFTER) { s.comment = t + " 外出"; sendText(hSeat, s.comment, "\"until\":\"" + t + "\""); }
+    if (g.kind == K_BACK) {
+      s.present = false;
+      s.back = t;
+      enqueue(hSeat, "{\"present\":false,\"back\":\"" + t + "\"}");
+    }
+    closeMenu();
+    return;
+  }
+  if (listCount() == 0) return;
+  s.comment = listItem(lSel);
+  sendText(hSeat, s.comment, String("\"duration\":\"") + g.duration + "\"");
+  closeMenu();
+}
+
+static void goBack() {
+  if (mode == M_GENRE) closeMenu();
+  else { mode = M_GENRE; gVel = 0; }
+}
+
+static void tapMenu(int tx, int ty) {
+  int dx = tx - 120, dy = ty - 120;
+  if (mode == M_GENRE) {
+    if (dx * dx + dy * dy < 50 * 50) { decide(); return; }
+    for (int i = 0; i < GN; i++) {  // アイコンをタップ → そのジャンルを開く
+      int x, y;
+      iconPos(i, x, y);
+      if ((tx - x) * (tx - x) + (ty - y) * (ty - y) < 28 * 28) { gSel = i; gAng = -90 + i * 36; decide(); return; }
+    }
+    return;
+  }
+  if (ty > 198) { goBack(); return; }
+  if (mode == M_VALUE) {
+    if (ty < 50 || ty > 190) return;
+    if (tx < 64) turnValue(-1);
+    else if (tx > 176) turnValue(1);
+    else decide();
+    return;
+  }
+  int n = listCount();
+  if (n == 0) return;
+  int k = lSel + (int)lroundf(dy / 32.0f);
+  if (k == lSel) decide();
+  else if (k >= 0 && k < n) lSel = k;
+}
+
+static void handleInput() {
   int d = encSteps();
+  bool click = M5.BtnA.wasClicked(), hold = M5.BtnA.wasHold();
+  bool tap = false, press = false;
+  int tx = 0, ty = 0;
+  if (M5.Touch.getCount() > 0) {
+    auto t = M5.Touch.getDetail();
+    tx = t.x;
+    ty = t.y;
+    tap = t.wasClicked();
+    press = t.wasHold();
+  }
+  if (mode != M_OFFICE && (d || click || hold || tap || press)) menuIdle = millis();
+
+  if (mode == M_OFFICE) {
+    if (d) {
+      int k = 0;
+      while (DIAL_ORDER[k] != selected) k++;
+      k = ((k + d) % 6 + 6) % 6;
+      selected = DIAL_ORDER[k];
+      nameUntil = millis() + 1500;
+    }
+    if (hold) { S[selected].present = !S[selected].present; sendPresent(selected); }
+    else if (click) openMenu(selected);
+    if (tap) {  // 席をタップ → 在席 / 不在
+      int i = seatAt(tx, ty);
+      if (i >= 0) { S[i].present = !S[i].present; selected = i; sendPresent(i); }
+    }
+    if (press) {  // 席を長押し → その席のひとこと
+      int i = seatAt(tx, ty);
+      if (i >= 0) openMenu(i);
+    }
+    return;
+  }
+
+  if (hold || press) { goBack(); return; }
   if (d) {
-    int k = 0;
-    while (DIAL_ORDER[k] != selected) k++;
-    k = ((k + d) % 6 + 6) % 6;
-    selected = DIAL_ORDER[k];
-    nameUntil = millis() + 1500;
+    if (mode == M_GENRE) gSel = ((gSel + d) % GN + GN) % GN;
+    else if (mode == M_VALUE) turnValue(d);
+    else if (listCount()) lSel = constrain(lSel + d, 0, listCount() - 1);
   }
-  if (M5.BtnA.wasHold()) {
-    S[selected].present = !S[selected].present;
-    sendPresent(selected);
-  } else if (M5.BtnA.wasClicked()) {
-    SeatState& s = S[selected];
-    s.presetIdx = (s.presetIdx + 1) % PRESET_N;
-    s.comment = PRESETS[s.presetIdx];
-    sendComment(selected);
-  }
+  if (click) decide();
+  else if (tap) tapMenu(tx, ty);
+  if (mode != M_OFFICE && millis() - menuIdle > MENU_IDLE_MS) closeMenu();
 }
 
 void setup() {
@@ -702,20 +1162,18 @@ void loop() {
   handleSerial();
   applyInbox();
   applyArt();
-  handleDial();
-  if (M5.Touch.getCount() > 0) {
-    auto t = M5.Touch.getDetail();
-    if (t.wasClicked()) {
-      int i = seatAt(t.x, t.y);
-      if (i >= 0) { S[i].present = !S[i].present; selected = i; sendPresent(i); }
-    }
-  }
+  handleInput();
 
   uint32_t now = millis();
   if ((int32_t)(now - nextTick) >= 0) {
-    nextTick = now + TICK_MS;
-    render();
-    frameIdx = (frameIdx + 1) % FRAMES;
+    if (mode == M_OFFICE) {
+      nextTick = now + TICK_MS;
+      render();
+      frameIdx = (frameIdx + 1) % FRAMES;
+    } else {
+      nextTick = now + MENU_TICK_MS;
+      renderMenu();
+    }
   }
   delay(1);
 }
