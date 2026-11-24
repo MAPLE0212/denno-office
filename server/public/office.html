@@ -79,6 +79,7 @@
 
   <div class="below">
     <span>ドラッグで視点を回転、ホイールやピンチで拡大縮小。手前の列 A1〜A3 ／ 奥の列 B1〜B3</span>
+    <!-- マイクでガヤガヤ（いまは止めている。戻すときはこのコメントと、下の script の「マイクでガヤガヤ」を外す）
     <span class="gaya-ctl">
       <button class="btn" id="gayaBtn" aria-pressed="false">マイクでガヤガヤ</button>
       <button class="btn" id="gayaDemo" aria-pressed="false" title="マイクなしで、静か→にぎやか→静か をくり返して演出だけ見る">お試し</button>
@@ -86,6 +87,7 @@
         <span class="meter" title="マイクの音量"><i id="gayaMeter"></i></span>
         <label id="gayaSensWrap" title="感度">感度 <input type="range" id="gayaSens" min="0" max="1" step="0.05" value="0.5"></label>
       </span>
+    -->
     </span>
     <span><span id="reset"></span>　<button class="btn" id="home">視点をもどす</button></span>
   </div>
@@ -324,6 +326,7 @@ function placePins() {
   }
 }
 
+/* マイクでガヤガヤ（いまは止めている。戻すときはこのコメントの始まりと終わり を外し、frame() の noise を gayaUpdate(dt) に戻す）
 // ---- マイクでガヤガヤ：まわりの話し声が大きいほど、キャラの頭の両横に漫画のギザギザが出てざわつく ----
 // 頭の横のギザギザ 1 本ぶんの点（高さ ±1 の単位）。上から下へ、内側と外側を行ったり来たりする
 function zigzagPoints(dir) {
@@ -466,11 +469,12 @@ $("gayaBtn").addEventListener("click", async () => {
   }
   gayaSync();
 });
+*/
 
 const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
-  const noise = gayaUpdate(dt);
+  const noise = 0; // マイクでガヤガヤを戻すときは gayaUpdate(dt)
   for (const seat of Object.values(seats)) {
     if (!seat.chara) continue;
     applyPose(seat, t);
