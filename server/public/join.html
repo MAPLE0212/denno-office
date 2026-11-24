@@ -64,7 +64,7 @@ const $ = (id) => document.getElementById(id);
 const ROWS = [["奥", ["B1", "B2", "B3"]], ["手前", ["A1", "A2", "A3"]]];
 let state = null;
 let seat = null;
-let codeInfo = null; // { canClaim, usedBy } 番号が確かめられたとき
+let codeInfo = null; // { usedBy } 番号が確かめられたとき
 let checking = 0;
 
 const free = () => state && state.mode === "free";
