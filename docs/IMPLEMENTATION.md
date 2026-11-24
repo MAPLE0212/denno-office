@@ -37,6 +37,8 @@ M5Stack StopWatch の円形画面（466×466）に、オフィスの島（6席�
 | `tools/pack6.py` | PNG 群を office_art.h に変換し、合成プレビューも出力 |
 | `tools/bake_chara.py` / `bake_chara.html` | 選んだキャラを6席分の差分スプライト（`server/sprites/`）に焼く（サーバが自動で呼ぶ） |
 | `docs/stopwatch-preview.png` | 実機で出る想定の画面（全員在席・コメントあり） |
+| `firmware/dial/` | M5Dial 版（別のプログラム。`main.cpp`・`office_art_dial.h`・`partitions_dial.csv`）。13 章 |
+| `tools/pack_dial.py` | bake6_out の絵を 240×240 に縮めて `firmware/dial/office_art_dial.h` を作る |
 
 ## 3. ハードウェアと前提
 
@@ -241,3 +243,46 @@ python3 pack6.py          # ../firmware/office_art.h と bake6_out/composite_pre
 - 前景レイヤー対応（10章）
 - 社員ごとの髪型・服のパーツ化（`makeChara()` を部品の組み合わせ式にする）
 - 「暑い／寒い」の意思表示を専用アイコンで表示
+
+## 13. M5Dial 版（`firmware/dial/`）
+
+StopWatch 版を元にした別のプログラム。StopWatch 版（`firmware/main.cpp`）には手を入れていない。
+`platformio.ini` の `build_src_filter` で、StopWatch 用は `dial/` を入れず、Dial 用は `dial/` だけを入れる。
+
+- M5Dial：StampS3（ESP32-S3FN8、Flash 8MB、**PSRAM なし**）、1.28" 円形 TFT 240×240（GC9A01）、タッチ、ロータリーエンコーダ（G40/G41）、押しボタン（G42）
+- ビルド：`pio run -e m5stack-dial`（board = `m5stack-stamps3`）。2026-11-22 にビルド・書き込み（RAM 7.3%、Flash 35.0%）、2026-11-24 に実機で画面と操作を確認
+
+### StopWatch 版との違い
+
+| | StopWatch | Dial |
+|---|---|---|
+| 画面 | 466×466 | 240×240（466 で焼いた絵を `pack_dial.py` で縮める） |
+| キャンバス | PSRAM に 2 枚（合成用・背景） | 内蔵 RAM に 1 枚（約 113KB、Wi-Fi より先に確保） |
+| 背景 | JPEG を起動時に展開 | フラッシュの RGB565 配列 `BG_RAW` を毎コマ `memcpy` |
+| 取り寄せたはんこ | PSRAM に読む | フラッシュの `sprites` 領域に書き、`esp_partition_mmap` で直接読む |
+| はんこの場所 | `/sprites/<cid>/<席>.bin` | `/sprites/<cid>/dial/<席>.bin`（`/api/device?board=dial` の版を見る） |
+| 吹き出し | 2 行（名前・コメント）、幅 100 固定 | コメント 1 行、幅は文字に合わせ最大 84。円からはみ出すぶんは内側へ寄せる |
+| 選択の表示 | 画面下「操作中 A1 佐藤」 | 画面下「A1 佐藤」、選択中の吹き出し・不在タグを青枠、つまみで選んだ直後は頭上に名札 |
+
+### はんこの置き場（`partitions_dial.csv` の `sprites`、2.25MB）
+
+- 192KB の置き場 × 12（席ごとに 2 つ）。画面が片方を描いているあいだに、もう片方へ書く（書く前に、前に渡したはんこへの差し替えが終わるのを待つ）。
+- 置き場の先頭 64 バイトに見出し（`"DDS1"`・世代・長さ・版・キャラ ID）。本体を書き終えてから最後に見出しを書くので、途中で電源が切れた置き場は使われない。
+- 起動時は席ごとに世代が新しいほうの置き場を使い、そのキャラ・版を「持っている」ことにする（同じ版なら取り直さない）。
+- フラッシュを書き換えるあいだは描画が一瞬止まる（キャラが変わったときだけ）。
+
+### サーバ側
+
+- `tools/bake_chara.py` は StopWatch 用と同時に Dial 用（`dial/<席>.bin`、`bake_out/<cid>_preview_dial.png`）も焼く。
+- `server/server.js` は Dial 用が 6 席そろっていないキャラを焼き直す。そろうまで `/api/device?board=dial` は版を 0 にして返し、Dial はファームの絵で描く。
+
+### 島の見た目を変えたとき
+
+`python3 bake6.py` → `python3 pack6.py`（StopWatch）→ `python3 pack_dial.py`（Dial）。
+視点を変えた場合は `firmware/dial/main.cpp` の `BUB`（240 の座標）も直す。
+
+### 実機で合わなかったときに直すところ
+
+- **つまみの向きと量**：右回りで B1 → B2 → B3 → A3 → A2 → A1 に進む。逆なら `ENC_A` / `ENC_B` を入れ替え、1 カチッで 2 席動く・2 カチッで 1 席なら `ENC_STEP` を直す。
+- **機種の判定**：M5Unified が Dial と見分けられないときのため `fallback_board = board_M5Dial` を指定している。
+- **見本の絵**：`docs/dial-preview.png` はヒラギノで描いた見本で、実機の文字（`lgfxJapanGothic_12`）とは少し違う。

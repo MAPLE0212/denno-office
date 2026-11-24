@@ -5,6 +5,7 @@
 
 - **ブラウザ版**: Three.js の 3D オフィス（`/`）と、自分の在席・ひとりごと・キャラを切り替えるマイページ（`/me`）
 - **StopWatch 版（おまけ）**: M5Stack StopWatch の丸い画面に同じ島を表示し、タップで在席を切り替える
+- **Dial 版（おまけ）**: M5Dial の小さな丸い画面に同じ島を表示し、つまみで席を選んで切り替える
 
 ![StopWatch の画面](docs/stopwatch-preview.png)
 
@@ -56,11 +57,11 @@ node server/server.js
 |---|---|
 | `server/` | サーバ（`server.js`）と画面（`public/`）。依存パッケージなし |
 | `characters/` | 作成者ごとのフォルダにキャラ（`<id>.html` = 3D モデル、`<id>_front.png` = マイページ用の画像）と一覧 `characters.json`。雛形 `_template.html` |
-| `firmware/` | StopWatch のファームウェア（`main.cpp`、焼き込んだ絵 `office_art.h`） |
-| `tools/` | キャラのチェック（`check_chara.mjs`）、3D の絵を StopWatch 用に焼くスクリプト（Python + ヘッドレス Chromium） |
+| `firmware/` | StopWatch のファームウェア（`main.cpp`、焼き込んだ絵 `office_art.h`）。Dial 用は `firmware/dial/`（別のプログラム） |
+| `tools/` | キャラのチェック（`check_chara.mjs`）、3D の絵を StopWatch / Dial 用に焼くスクリプト（Python + ヘッドレス Chromium） |
 | `docs/` | 実装メモ |
 | `.github/` | Pull Request のときのキャラのチェック（GitHub Actions）と PR のテンプレート |
-| `platformio.ini` | StopWatch のビルド設定 |
+| `platformio.ini` | StopWatch と Dial のビルド設定 |
 
 ## StopWatch 版（任意）
 
@@ -103,6 +104,28 @@ python3 -m venv .venv
 
 島の見た目（机・カメラ・背景）を変えて焼き直す手順は [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) を見てください。
 
+## Dial 版（任意）
+
+[M5Dial](https://docs.m5stack.com/en/core/M5Dial) を持っている場合だけ必要です。StopWatch 版とは別のプログラム（`firmware/dial/`）で、240×240 の画面と、追加メモリ（PSRAM）が無いことに合わせてあります。
+
+![Dial の画面](docs/dial-preview.png)
+
+### 書き込み
+
+- ターミナルで `pio run -e m5stack-dial -t upload`（`pio` が見つからないときは `~/.platformio/penv/bin/pio run -e m5stack-dial -t upload`）
+- VS Code の PlatformIO では、下のステータスバーで環境を `env:m5stack-dial` に切り替えてから「→（Upload）」を押す（何も選ばないと StopWatch 用が書き込まれます）
+- Wi-Fi の設定は StopWatch と同じ `firmware/denno_config.h` を使います
+
+### 操作
+
+- つまみを回す: 操作する席を選ぶ（島のまわりを時計回り。選んだ直後は頭の上に名札が出る）
+- つまみを押す: 選択中の席のひとりごと（定型文）を順送り
+- つまみを長押し: 選択中の席の在席 / 不在
+- 画面タップ: タップした席の在席 / 不在
+- シリアルのコマンドと画面下の点の色は StopWatch 版と同じです
+
+マイページで選んだキャラは、サーバが StopWatch 用と一緒に Dial 用の小さい絵（`server/sprites/<キャラ>/dial/`）も焼きます。Dial は取り寄せた絵を本体のフラッシュに保存するので、電源を入れ直しても取り直しません。
+
 ## API
 
 | メソッド | パス | 内容 |
@@ -111,7 +134,7 @@ python3 -m venv .venv
 | GET | `/api/characters` | キャラ一覧 |
 | PATCH | `/api/members/<id>` | `{ present?, comment?: { text, duration } \| null, character?: "maple/c01" \| null }` |
 | GET | `/api/events` | 状態が変わるたびに `state` を送る（Server-Sent Events） |
-| GET | `/api/device` | StopWatch 用（1 行 1 席のタブ区切り） |
+| GET | `/api/device` | StopWatch 用（1 行 1 席のタブ区切り）。`?board=dial` で Dial 用（最後の列が Dial 用の絵の版） |
 
 ## ライセンス
 
