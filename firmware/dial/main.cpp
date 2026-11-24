@@ -121,6 +121,7 @@ struct LangText {
   const char* tDone;      // 0 になった
   const char* tDoneOut;   // 外出の 0
   const char* tNone[2];   // タイマーが無いとき
+  const char* tTapCard;   // 戻りの時刻が来たとき「戻ったらカードを」
   const char* san;        // 名前のあと（" さん"）
   const char* present;    // 在席
   const char* hello;      // おはよう
@@ -142,7 +143,7 @@ static const LangText LANGS[] = {
    "分", "分後", "〜%s まで", "%s に外出", "に戻ります",
    "%s 〜%s", "%s 外出", "不在", "離席", "%s戻り",
    {"マイページの", "「オリジナル」で足せます"},
-   "%s のこり", "外出まで", "戻りまで", "時間です", "出かける時間", {"タイマーなし", "集中・休憩などを選ぶと出ます"},
+   "%s のこり", "外出まで", "戻りまで", "時間です", "出かける時間", {"タイマーなし", "集中・休憩などを選ぶと出ます"}, "戻ったらカードをかざしてね",
    " さん", "在席", "おはよう", "おつかれさま", "おかえり", "いってらっしゃい", "席はそのままです",
    "在席にしました", "不在にしました", "席を空けました", "%s に座りました"},
   {"en",
@@ -153,7 +154,7 @@ static const LangText LANGS[] = {
    "min", "min", "until %s", "out at %s", "I'll be back",
    "%s ~%s", "Out %s", "Away", "Stepped out", "back %s",
    {"Add your own in", "My Page > Custom"},
-   "%s left", "Until out", "Until back", "Time's up", "Time to go", {"No timer", "Pick Focus, Break, etc."},
+   "%s left", "Until out", "Until back", "Time's up", "Time to go", {"No timer", "Pick Focus, Break, etc."}, "Tap your card when back",
    "", "In", "Good morning", "Good work", "Welcome back", "See you", "Seat kept",
    "Marked in", "Marked away", "Seat freed", "Sat at %s"},
   {"zh",
@@ -164,7 +165,7 @@ static const LangText LANGS[] = {
    "分钟", "分钟后", "到 %s", "%s 外出", "回来",
    "%s至%s", "%s 外出", "不在", "暂离", "%s回来",
    {"可在我的页面的", "「自定义」中添加"},
-   "%s 剩余", "距离外出", "距离回来", "时间到了", "该出发了", {"没有计时", "选择专注、休息等即可显示"},
+   "%s 剩余", "距离外出", "距离回来", "时间到了", "该出发了", {"没有计时", "选择专注、休息等即可显示"}, "回来后请刷卡",
    "", "在座", "早上好", "辛苦了", "欢迎回来", "慢走", "座位已保留",
    "已设为在座", "已设为不在", "已空出座位", "已坐在 %s"},
 };
@@ -1401,9 +1402,7 @@ static void roleHint();  // 下（操作のところ）
 static int tSeat = 0;
 static int8_t tShowGen = 0;      // 出している種類（GEN の番号 + 1。戻りは K_BACK のジャンル）
 static uint32_t tShowEnd = 0, tShowTotal = 1;
-static uint32_t tDoneAt = 0;      // 0 になった時刻（鳴らすのは 1 回だけ。少し見せたら島に戻る）
-static int beepLeft = 0;
-static uint32_t nextBeep = 0;
+static uint32_t tDoneAt = 0;      // 0 になった時刻（少し見せたら島に戻る）
 
 static int genOf(uint8_t kind) {
   for (int g = 0; g < GN; g++) if (GEN[g].kind == kind) return g;
@@ -1441,7 +1440,6 @@ static void openTimer(int i) {
   }
   tSeat = i;
   tDoneAt = 0;
-  beepLeft = 0;
   mode = M_TIMER;
 }
 
@@ -1451,8 +1449,8 @@ static void renderTimer() {
   uint32_t now = millis();
   int32_t leftMs = (int32_t)(tShowEnd - now);
   int32_t left = leftMs > 0 ? (leftMs + 999) / 1000 : 0;
-  if (left == 0 && !tDoneAt) { tDoneAt = now ? now : 1; beepLeft = 3; nextBeep = now; }
-  if (beepLeft > 0 && (int32_t)(now - nextBeep) >= 0) { M5.Speaker.tone(2600, 120); beepLeft--; nextBeep = now + 250; }
+  // 0 になっても音は鳴らさず、在席 / 不在も変えない（戻ったら本人がカードをかざす）
+  if (left == 0 && !tDoneAt) tDoneAt = now ? now : 1;
 
   canvas.fillScreen(c);
   // 外の輪：残りの割合（12 時から時計回りに減る）
@@ -1472,7 +1470,12 @@ static void renderTimer() {
     String done = g.kind == K_AFTER ? L().tDoneOut : L().tDone;
     setFontFor(done, 24);
     canvas.setTextSize(done.length() > 15 ? 1.2f : 1.6f);
-    canvas.drawString(done, 120, 120);
+    canvas.drawString(done, 120, g.kind == K_BACK ? 112 : 120);
+    if (g.kind == K_BACK) {  // 戻りは自動で在席にしない
+      setFontFor(L().tTapCard, 16);
+      canvas.setTextSize(1);
+      canvas.drawString(L().tTapCard, 120, 142);
+    }
     canvas.setTextSize(1);
   } else {
     char b[12];
