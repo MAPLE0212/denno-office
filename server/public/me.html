@@ -448,8 +448,8 @@ function renderLangs(m) {
   }
   for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.id === m.lang));
   $("langHint").textContent = state.mode === "free"
-    ? "机の Dial は、そこに座っている人の言葉で出ます（ひとこと選び・タイマー・不在の札など）。だれも座っていない机と、カード登録などの案内は日本語です。"
-    : "自分専用の Dial は、ここで選んだ言葉で出ます（ひとこと選び・タイマー・不在の札など）。全体用の Dial はいつも日本語です。";
+    ? "机の Dial は、そこに座っている人の言葉で出ます（ひとこと選び・タイマー・不在の札など）。ただし Dial に入っている言葉だけです（日本語はどの Dial にも入っていて、英語・中国語は書き込むときに入れたものだけ）。入っていなければ日本語で出ます。"
+    : "自分専用の Dial は、ここで選んだ言葉で出ます（ひとこと選び・タイマー・不在の札など）。ただし Dial に入っている言葉だけです（日本語はどの Dial にも入っていて、英語・中国語は書き込むときに入れたものだけ）。全体用の Dial はいつも日本語です。";
 }
 
 function renderDurations() {

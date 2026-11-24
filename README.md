@@ -116,7 +116,11 @@ python3 -m venv .venv
 - ターミナルで `pio run -e m5stack-dial -t upload`（`pio` が見つからないときは `~/.platformio/penv/bin/pio run -e m5stack-dial -t upload`）
 - VS Code の PlatformIO では、下のステータスバーで環境を `env:m5stack-dial` に切り替えてから「→（Upload）」を押す（何も選ばないと StopWatch 用が書き込まれます）
 - Wi-Fi の設定は StopWatch と同じ `firmware/denno_config.h` を使います
-- 言葉（日本語・英語・中国語）は Dial では選びません。マイページの「Dial の言葉」で人ごとに選び、個人用の Dial は持ち主、机の Dial は座っている人の言葉になります（全体用は日本語）
+- 言葉：どの Dial にも日本語が入っています。英語か中国語も使うときは、書き込むときに選びます（入れた言葉の文とフォントだけが入るので、中国語の約 1MB のフォントは中国語のときだけ）
+  - 日本語だけ: `pio run -e m5stack-dial -t upload`
+  - 日本語 + 英語: `pio run -e m5stack-dial-en -t upload`
+  - 日本語 + 中国語: `pio run -e m5stack-dial-zh -t upload`
+  - どちらで出すかは、マイページの「Dial の言葉」で人ごとに選びます。個人用の Dial は持ち主、机の Dial は座っている人の言葉が、その Dial に入っていればその言葉で、無ければ日本語で出ます（全体用は日本語）。Dial に言葉を選ぶ操作はありません
 
 ### Dial の役割
 

@@ -34,11 +34,11 @@
 //   つまみを押す・画面タップ: この Dial の席の人の「ひとこと選び」を開く（下の「ひとこと選び」）。全体用・未設定はタップで席を選ぶ
 //   つまみを長押し: この Dial の席の 在席 / 不在（フリーアドレスは 離席。席は取ったまま）
 //   お試し（Wi-Fi なし）: つまみで席を選び、押す=ひとこと選び・長押し=在席 / 不在、タップ=その席の在席 / 不在、画面の長押し=その席のひとこと
-//   シリアル(115200): "p 3" 席3の在席切替 / "c 3 寒い…" 席3にコメント / "c 3" 席3のコメントを消す / "l en" 言語（ja / en / zh。試す用）
+//   シリアル(115200): "p 3" 席3の在席切替 / "c 3 寒い…" 席3にコメント / "c 3" 席3のコメントを消す
 //
-// 言語：個人用の Dial は持ち主、机の Dial は座っている人がマイページで選んだ言語（/api/device の #dial 行の 5 列目）。
-// 全体用・未設定の Dial は日本語。Dial に言語を選ぶ操作は無い。
-// 日本語のフォントに無い字（中国語の简体字など）を含む文字列は、中国語のフォント（efontCN）で描く。
+// 言語：どの言葉を入れるかは書き込むときに決める（platformio.ini の m5stack-dial = 日本語だけ /
+// m5stack-dial-en = 日本語 + 英語 / m5stack-dial-zh = 日本語 + 中国語）。中国語のフォント（efontCN、約 1MB）は中国語のときだけ入る。
+// 個人用は持ち主、机は座っている人がマイページで選んだ言葉が、この Dial に入っていればそれで出す。無ければ・全体用は日本語。
 //                     "k 04A1B2C3" その番号のカードをかざしたことにする（カードなしで試す）
 #include <M5Unified.h>
 #include <M5Dial.h>  // カードの読み取り（M5Dial.Rfid）だけ使う。つまみは下の自前の割り込みで読む
@@ -134,7 +134,9 @@ struct LangText {
   const char* freed;      // 席を空けました
   const char* sat;        // 「A1 に座りました」
 };
-static const LangText LANGS[] = {
+// 日本語はいつも入る。書き込むときに英語か中国語を選ぶと、その文も入る（ビルドの -DDIAL_LANG_EN / -DDIAL_LANG_ZH）。
+// どちらで出すかは、マイページの「Dial の言葉」（#dial 行の 5 列目）がこの Dial に入っている言葉と同じかで決める
+static const LangText LANG_JA =
   {"ja",
    {"集中", "休憩", "会議", "外出", "戻り", "気温", "予定", "声かけ", "オリジナル", "消す"},
    {"寒い", "ちょっと寒い", "ちょっと暑い", "暑い"},
@@ -145,18 +147,9 @@ static const LangText LANGS[] = {
    {"マイページの", "「オリジナル」で足せます"},
    "%s のこり", "外出まで", "戻りまで", "時間です", "出かける時間", {"タイマーなし", "集中・休憩などを選ぶと出ます"}, "戻ったらカードをかざしてね",
    " さん", "在席", "おはよう", "おつかれさま", "おかえり", "いってらっしゃい", "席はそのままです",
-   "在席にしました", "不在にしました", "席を空けました", "%s に座りました"},
-  {"en",
-   {"Focus", "Break", "Meeting", "Out", "Back", "Temp", "Plans", "Chat", "Custom", "Clear"},
-   {"Cold", "A bit cold", "A bit hot", "Hot"},
-   {"PM meetings", "Leaving on time", "Off tomorrow"},
-   {"Free to talk", "I'm free now", "Up for a chat", "Will reply later"},
-   "min", "min", "until %s", "out at %s", "I'll be back",
-   "%s ~%s", "Out %s", "Away", "Stepped out", "back %s",
-   {"Add your own in", "My Page > Custom"},
-   "%s left", "Until out", "Until back", "Time's up", "Time to go", {"No timer", "Pick Focus, Break, etc."}, "Tap your card when back",
-   "", "In", "Good morning", "Good work", "Welcome back", "See you", "Seat kept",
-   "Marked in", "Marked away", "Seat freed", "Sat at %s"},
+   "在席にしました", "不在にしました", "席を空けました", "%s に座りました"};
+#if defined(DIAL_LANG_ZH)
+static const LangText LANG_EXTRA =
   {"zh",
    {"专注", "休息", "开会", "外出", "回来", "温度", "安排", "交流", "自定义", "清除"},
    {"好冷", "有点冷", "有点热", "好热"},
@@ -167,16 +160,27 @@ static const LangText LANGS[] = {
    {"可在我的页面的", "「自定义」中添加"},
    "%s 剩余", "距离外出", "距离回来", "时间到了", "该出发了", {"没有计时", "选择专注、休息等即可显示"}, "回来后请刷卡",
    "", "在座", "早上好", "辛苦了", "欢迎回来", "慢走", "座位已保留",
-   "已设为在座", "已设为不在", "已空出座位", "已坐在 %s"},
-};
-static const int LANG_N = sizeof(LANGS) / sizeof(LANGS[0]);
-static int lang = 0;  // サーバの #dial 行で変わる（全体用・未設定は 0 = 日本語）
-static int langForced = -1;  // シリアルの "l en"（試す用。電源を切ると戻る）
-static const LangText& L() { return LANGS[langForced >= 0 ? langForced : lang]; }
-
-static int langIndex(const String& code) {
-  for (int k = 0; k < LANG_N; k++) if (code.equalsIgnoreCase(LANGS[k].code)) return k;
-  return -1;
+   "已设为在座", "已设为不在", "已空出座位", "已坐在 %s"};
+#elif defined(DIAL_LANG_EN)
+static const LangText LANG_EXTRA =
+  {"en",
+   {"Focus", "Break", "Meeting", "Out", "Back", "Temp", "Plans", "Chat", "Custom", "Clear"},
+   {"Cold", "A bit cold", "A bit hot", "Hot"},
+   {"PM meetings", "Leaving on time", "Off tomorrow"},
+   {"Free to talk", "I'm free now", "Up for a chat", "Will reply later"},
+   "min", "min", "until %s", "out at %s", "I'll be back",
+   "%s ~%s", "Out %s", "Away", "Stepped out", "back %s",
+   {"Add your own in", "My Page > Custom"},
+   "%s left", "Until out", "Until back", "Time's up", "Time to go", {"No timer", "Pick Focus, Break, etc."}, "Tap your card when back",
+   "", "In", "Good morning", "Good work", "Welcome back", "See you", "Seat kept",
+   "Marked in", "Marked away", "Seat freed", "Sat at %s"};
+#endif
+static bool useExtra = false;  // サーバの #dial 行で変わる（全体用・未設定は日本語）
+static const LangText& L() {
+#if defined(DIAL_LANG_ZH) || defined(DIAL_LANG_EN)
+  if (useExtra) return LANG_EXTRA;
+#endif
+  return LANG_JA;
 }
 
 // "%s" を a, b で埋める
@@ -658,7 +662,9 @@ static void applyInbox() {
     if (line.startsWith("#dial\t")) {
       String f[5];
       splitTabs(line, f, 5);
-      lang = max(0, langIndex(f[4]));  // 個人用は持ち主、机は座っている人の言語。ほかは ja
+#if defined(DIAL_LANG_ZH) || defined(DIAL_LANG_EN)
+      useExtra = f[4] == LANG_EXTRA.code;  // 個人用は持ち主、机は座っている人の言葉。ほかは ja
+#endif
       DialRole r = f[1] == "personal" ? ROLE_PERSONAL : f[1] == "desk" ? ROLE_DESK : f[1] == "shared" ? ROLE_SHARED : ROLE_NONE;
       int rs = -1;
       for (int i = 0; i < 6; i++) if (f[2] == S[i].code) rs = i;
@@ -739,13 +745,14 @@ static int inCircle(int x, int w, int y, int h) {
 }
 
 // 文字に合うフォントにする（px は 12 / 16 / 20 / 24）。
-// 日本語のフォントに無い字（中国語の简体字など）があれば、中国語のフォント（efontCN）で描く。
+// 中国語で書き込んだときだけ：日本語のフォントに無い字（简体字など）があれば、中国語のフォント（efontCN）で描く。
 // 中国語のフォントには日本だけの漢字が無いので、文字列ごとに使い分ける。efontCN に 20 は無いので 24 を使う
 static void setFontFor(const String& s, int px = 12) {
   const lgfx::IFont* ja = px >= 24 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_24
                         : px >= 20 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_20
                         : px >= 16 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_16
                                    : (const lgfx::IFont*)&fonts::lgfxJapanGothic_12;
+#if defined(DIAL_LANG_ZH)
   lgfx::FontMetrics m;
   for (size_t i = 0; i < s.length();) {
     uint8_t c = s[i];
@@ -759,6 +766,7 @@ static void setFontFor(const String& s, int px = 12) {
       return;
     }
   }
+#endif
   canvas.setFont(ja);
 }
 
@@ -1038,11 +1046,6 @@ static void handleSerial() {
   line.trim();
   if (line.length() < 3) return;
   char cmd = line[0];
-  if (cmd == 'l') {
-    langForced = langIndex(line.substring(2));
-    Serial.printf("lang=%s\n", L().code);
-    return;
-  }
   if (cmd == 'k') { String uid = line.substring(2); uid.trim(); uid.toUpperCase(); tapCard(uid); return; }
   int i = line.substring(2, 3).toInt();
   if (i < 0 || i > 5) return;
