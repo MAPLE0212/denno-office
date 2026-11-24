@@ -1,7 +1,8 @@
 # M5Dial（StampS3、フラッシュ 8MB）用。OTA は使わない
-#   factory : ファーム本体（背景とキャラの絵を含めて約 2MB）
-#   sprites : サーバから取り寄せたキャラのはんこ。192KB × 12 個（6 席 × 2 つの置き場、firmware/dial/main.cpp の SLOT_SIZE）
+#   factory : ファーム本体（背景とキャラの絵、日本語・中国語のフォントを含めて約 2.9MB。余裕を見て 5.7MB）
+#   sprites : サーバから取り寄せたキャラのはんこ。192KB × 12 個（6 席 × 2 つの置き場、firmware/dial/main.cpp の SLOT_SIZE）。
+#             8MB のいちばん後ろに置く（ここを動かすと、次の起動ではんこを取り直す）
 # Name,   Type, SubType, Offset,   Size
 nvs,      data, nvs,     0x9000,   0x5000,
-factory,  app,  factory, 0x10000,  0x300000,
-sprites,  0x40, 0x00,    0x310000, 0x240000,
+factory,  app,  factory, 0x10000,  0x5B0000,
+sprites,  0x40, 0x00,    0x5C0000, 0x240000,

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>はじめての登録｜電脳オフィス</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+.step h2 { display: flex; gap: 10px; align-items: center; }
+.step h2 .n {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--bg);
+  display: inline-grid; place-items: center; font-family: var(--font-mono); font-size: 12px;
+}
+.name { max-width: 320px; }
+.coderow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.foot .why { font-size: 13px; color: var(--muted); }
+ol.how { margin: 0 0 12px; padding-left: 1.4em; font-size: 14px; }
+ol.how li { margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>電脳オフィス / <b>はじめての登録</b></h1>
+    <nav>
+      <span class="conn" id="conn">接続中…</span>
+      <a href="/">オフィスを見る</a>
+      <a href="/me">マイページ</a>
+    </nav>
+  </header>
+
+  <section class="card step">
+    <h2><span class="n">1</span>名前</h2>
+    <input class="field name" id="name" type="text" maxlength="20" placeholder="オフィスで出る名前（例：佐藤）" autocomplete="off" aria-label="名前">
+  </section>
+
+  <section class="card step">
+    <h2><span class="n">2</span><span id="seatTitle">自分の席</span></h2>
+    <div class="seats" id="seats"></div>
+    <p class="hint" id="seatHint"></p>
+  </section>
+
+  <section class="card step">
+    <h2><span class="n">3</span>カード</h2>
+    <ol class="how" id="how"></ol>
+    <div class="coderow">
+      <input class="codein" id="code" type="text" inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="off" aria-label="Dial に出た番号">
+    </div>
+    <div class="codestat" id="codeStat"></div>
+    <label class="check" id="claimRow" hidden><input type="checkbox" id="claim" checked> この Dial を自分専用にする（ほかの人のカードは受け付けなくなります）</label>
+    <p class="hint">カードはあとからマイページでも登録できます。番号は 10 分で切れます。</p>
+  </section>
+
+  <section class="card foot">
+    <span class="why" id="why"></span>
+    <button class="btn primary" id="go" disabled>登録してキャラを選ぶ</button>
+  </section>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const ROWS = [["奥", ["B1", "B2", "B3"]], ["手前", ["A1", "A2", "A3"]]];
+let state = null;
+let seat = null;
+let codeInfo = null; // { canClaim, usedBy } 番号が確かめられたとき
+let checking = 0;
+
+const free = () => state && state.mode === "free";
+
+function renderMode() {
+  $("seatTitle").textContent = free() ? "いつもの席（なくてもいい）" : "自分の席";
+  $("seatHint").textContent = free()
+    ? "フリーアドレスなので、座る席は毎日その場で決めます。いつもの席を決めておくと、マイページで在席にしたときにそこへ座ります（空いていれば）。もう一度押すと外せます。"
+    : "使われている席は選べません。席を変えたいときは管理（/admin）で直せます。";
+  $("how").innerHTML = free()
+    ? "<li>どれかの<b>机の Dial</b>にカードをかざす</li><li>Dial に出た 4 桁の番号を入れる</li>"
+    : "<li>机に<b>自分の Dial</b>があればその Dial に、なければ<b>全体用の Dial</b>にカードをかざす</li><li>Dial に出た 4 桁の番号を入れる</li>";
+}
+
+function renderSeats() {
+  // 固定席：ほかの人の席は選べない（サンプルの人の席は選べる）。フリーアドレス：いつもの席なので重なってよい
+  const holder = free() ? {} : Object.fromEntries(state.members.filter((m) => m.seat).map((m) => [m.seat, m]));
+  if (seat && holder[seat] && !holder[seat].sample) seat = null; // 先に誰かが取った
+  const kids = [];
+  ROWS.forEach(([label, codes], r) => {
+    const l = document.createElement("span");
+    l.className = "row";
+    l.textContent = label;
+    kids.push(l);
+    for (const code of codes) {
+      const h = holder[code];
+      const b = document.createElement("button");
+      b.type = "button";
+      b.disabled = !!h && !h.sample;
+      b.setAttribute("aria-pressed", String(seat === code));
+      b.innerHTML = "<b></b><span></span>";
+      b.querySelector("b").textContent = code;
+      b.querySelector("span").textContent = b.disabled ? `${h.name} さん` : seat === code ? "ここにする" : free() ? "" : "空き";
+      b.addEventListener("click", () => { seat = free() && seat === code ? null : code; renderSeats(); update(); });
+      kids.push(b);
+    }
+    if (r === 0) { const d = document.createElement("span"); d.className = "desk"; kids.push(document.createElement("span"), d); }
+  });
+  $("seats").replaceChildren(...kids);
+}
+
+async function checkCode() {
+  const code = $("code").value.replace(/\D/g, "");
+  $("code").value = code;
+  codeInfo = null;
+  $("claimRow").hidden = true;
+  const st = $("codeStat");
+  st.className = "codestat";
+  if (code.length < 4) { st.textContent = ""; update(); return; }
+  const my = ++checking;
+  st.textContent = "確かめています…";
+  try {
+    const res = await fetch(`/api/codes/${code}`);
+    const json = await res.json();
+    if (my !== checking) return;
+    if (!res.ok) throw new Error(json.error);
+    if (json.usedBy) throw new Error(`このカードはもう ${json.usedBy.name} さんが使っています`);
+    codeInfo = json;
+    st.classList.add("ok");
+    st.textContent = json.dialRole === "shared" ? "カードが見つかりました（全体用の Dial）" : "カードが見つかりました";
+    $("claimRow").hidden = !json.canClaim;
+  } catch (e) {
+    if (my !== checking) return;
+    st.classList.add("ng");
+    st.textContent = e.message || "確かめられませんでした";
+  }
+  update();
+}
+
+function update() {
+  const name = $("name").value.trim();
+  const code = $("code").value;
+  const needSeat = !free() && !seat;
+  const why = !name ? "名前を入れてください" : needSeat ? "席を選んでください"
+    : code && !codeInfo ? "カードの番号を確かめています" : !code ? "カードなしで登録します（あとで登録できます）" : "";
+  $("why").textContent = why;
+  $("go").disabled = !name || needSeat || (!!code && !codeInfo);
+}
+
+$("name").addEventListener("input", update);
+$("code").addEventListener("input", checkCode);
+$("go").addEventListener("click", async () => {
+  $("go").disabled = true;
+  const body = { name: $("name").value.trim(), seat };
+  if (codeInfo) Object.assign(body, { code: $("code").value, claimDial: codeInfo.canClaim && $("claim").checked });
+  try {
+    const res = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `エラー (${res.status})`);
+    try { localStorage.setItem("denno.me", json.id); } catch {}
+    location.href = `/me/${json.id}?welcome=1`;
+  } catch (e) {
+    Denno.toast(e.message, true);
+    update();
+  }
+});
+
+Denno.subscribe((s) => { state = s; renderMode(); renderSeats(); update(); }, $("conn"));
+update();
+</script>
+</body>
+</html>

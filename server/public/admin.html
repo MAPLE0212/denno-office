@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理｜電脳オフィス</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+.mode { font-size: 14px; }
+.mode b { color: var(--accent); }
+.list { display: grid; gap: 8px; }
+.item {
+  display: grid; gap: 8px 12px; align-items: center; border: 1px solid var(--line); background: var(--panel-2);
+  border-radius: 12px; padding: 10px 12px;
+}
+.dial { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.2fr) auto; }
+.member { grid-template-columns: minmax(0, 1.3fr) 110px minmax(0, 1fr) auto; }
+.item .sub { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.item .on { color: var(--ok); }
+.item select, .item input { font: inherit; font-size: 14px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; width: 100%; min-width: 0; }
+.roles { display: flex; gap: 6px; }
+.tag { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); margin-left: 6px; }
+.cardst { font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cardst b { color: var(--ok); font-weight: 400; }
+.cardst .no { color: var(--muted); }
+.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
+.del { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 6px; font-size: 16px; }
+.del:hover { color: var(--danger); }
+.empty { color: var(--muted); font-size: 14px; }
+@media (max-width: 640px) {
+  .dial, .member { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>電脳オフィス / <b>管理</b></h1>
+    <nav>
+      <span class="conn" id="conn">接続中…</span>
+      <a href="/">オフィス</a>
+      <a href="/join">登録</a>
+      <a href="/tap" id="tapLink" hidden>NFC タグ</a>
+    </nav>
+  </header>
+
+  <section class="card">
+    <p class="mode" id="mode"></p>
+  </section>
+
+  <section class="card">
+    <h2>Dial</h2>
+    <div class="list" id="dials"></div>
+    <p class="hint" id="dialHint"></p>
+  </section>
+
+  <section class="card">
+    <h2>メンバー</h2>
+    <div class="list" id="members"></div>
+    <p class="hint" id="memberHint"></p>
+  </section>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null;
+let dials = [];
+const free = () => state && state.mode === "free";
+
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `エラー (${res.status})`);
+  return json;
+}
+
+async function act(fn, ok) {
+  try { await fn(); if (ok) Denno.toast(ok); } catch (e) { Denno.toast(e.message, true); }
+  loadDials();
+}
+
+function el(tag, props = {}, ...kids) {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids);
+  return e;
+}
+
+function ago(t) {
+  if (!t) return "まだつながっていません";
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 60 ? `${s}秒前` : s < 3600 ? `${Math.round(s / 60)}分前` : s < 86400 ? `${Math.round(s / 3600)}時間前` : `${Math.round(s / 86400)}日前`;
+}
+
+function renderMode() {
+  $("mode").innerHTML = free()
+    ? "席の決め方：<b>フリーアドレス</b>（<code>SEAT_MODE=free</code>）。座る席は毎日その場で決めます。"
+    : "席の決め方：<b>固定席</b>（<code>SEAT_MODE=fixed</code>）。席は一人ずつ決まっています。";
+  $("tapLink").hidden = !free();
+  $("dialHint").innerHTML = free()
+    ? "Wi-Fi につながった Dial は自動でここに出ます。Dial の画面下に出ている 4 桁（MAC の下 4 桁）で見分けて、<b>置いた机</b>を選んでください。机は 1 つの Dial にだけ決められます（ほかの Dial と同じ机にすると、前の Dial は外れます）。"
+    : "Wi-Fi につながった Dial は自動でここに出ます。<b>全体用</b>：登録したカードなら誰でも在席を切り替えられ、新しいカードの登録番号も出ます。<b>個人用</b>：その人のカードだけを受け付けます（持ち主が不在のあいだ、画面の背景がゆっくり光ります）。<b>未設定</b>：カードで在席を切り替えられ、長押しでかざした人の専用になります。";
+  $("memberHint").textContent = free()
+    ? "「いつもの席」は、マイページで席を選ばずに在席にしたときに座る席です（無くてもよく、何人かで同じ席でもかまいません）。「サンプル」の人は、誰かが登録すると全員消えます。"
+    : "「サンプル」の人がいる席は空き席として扱い、誰かが登録すると入れ替わります。消した人のキャラ（パーツで作ったもの）は残ります。";
+}
+
+function renderDials() {
+  if (!state) return;
+  if (!dials.length) { $("dials").replaceChildren(el("p", { className: "empty", textContent: "まだ Dial がつながっていません。Dial の電源を入れて、サーバとつながるのを待ってください。" })); return; }
+  if ($("dials").contains(document.activeElement)) return; // 入力中は描き直さない
+  const real = state.members.filter((m) => !m.sample);
+  $("dials").replaceChildren(...dials.map((d) => {
+    const label = el("input", { value: d.label, placeholder: free() ? "メモ（窓ぎわ など）" : "名前（例：入口）", maxLength: 20 });
+    label.addEventListener("change", () => act(() => api("PATCH", `/api/dials/${d.mac}`, { label: label.value }), "名前を変えました"));
+    const head = el("div", {}, label, el("div", { className: "sub" }, `Dial ${d.mac.slice(-4).toUpperCase()}　`,
+      el("span", { className: d.online ? "on" : "", textContent: d.online ? "● つながっています" : ago(d.seenAt) })));
+
+    const roles = el("div", { className: "roles" });
+    let now;
+    if (free()) {
+      // フリーアドレス：置いた机を選ぶ（選ばなければ「机が未設定」）
+      const desk = el("select", {});
+      desk.append(el("option", { value: "", textContent: "机を選ぶ" }));
+      for (const s of state.seats) desk.append(el("option", { value: s, textContent: `机 ${s}`, selected: d.role === "desk" && d.seat === s }));
+      desk.addEventListener("change", () => act(() => api("PATCH", `/api/dials/${d.mac}`, desk.value ? { role: "desk", seat: desk.value } : { role: "none" }),
+        desk.value ? `机 ${desk.value} にしました` : "机を外しました"));
+      roles.append(desk);
+      now = d.role === "desk" ? `机 ${d.seat} の Dial。カードをかざすとこの席に座る` : "机が未設定（カードの登録番号は出せる）";
+    } else {
+      const role = el("select", {});
+      for (const [v, t] of [["none", "未設定"], ["shared", "全体用"], ["personal", "個人用"]]) role.append(el("option", { value: v, textContent: t, selected: d.role === v }));
+      const owner = el("select", { hidden: d.role !== "personal" });
+      owner.append(el("option", { value: "", textContent: "誰の？" }));
+      for (const m of real) owner.append(el("option", { value: m.id, textContent: `${m.seat || "席なし"} ${m.name}`, selected: d.owner === m.id }));
+      const send = () => {
+        owner.hidden = role.value !== "personal";
+        if (role.value === "personal" && !owner.value) return;
+        act(() => api("PATCH", `/api/dials/${d.mac}`, { role: role.value, owner: owner.value || null }), "変えました");
+      };
+      role.addEventListener("change", send);
+      owner.addEventListener("change", send);
+      roles.append(role, owner);
+      now = d.role === "personal" ? `${d.ownerName || "?"} さんのカードだけ` : d.role === "shared" ? "登録したカードなら誰でも" : "かざした人が長押しで専用にできる";
+    }
+    const del = el("button", { className: "del", textContent: "×", title: "一覧から消す" });
+    del.setAttribute("aria-label", `Dial ${d.mac.slice(-4)} を一覧から消す`);
+    del.addEventListener("click", () => {
+      if (confirm("この Dial を一覧から消しますか？（Dial がまたつながると、未設定の状態でもう一度出てきます）"))
+        act(() => api("DELETE", `/api/dials/${d.mac}`), "消しました");
+    });
+    return el("div", { className: "item dial" }, head, roles, el("div", { className: "sub", textContent: now }), del);
+  }));
+}
+
+function renderMembers() {
+  if ($("members").contains(document.activeElement)) return; // 入力中は描き直さない
+  if (!state.members.length) { $("members").replaceChildren(el("p", { className: "empty", textContent: "まだ誰も登録していません。/join から登録します。" })); return; }
+  // 固定席は名簿の席。フリーアドレスは「いつもの席」（state の homeSeat）
+  const seatOf = (m) => (free() ? m.homeSeat : m.seat);
+  const taken = free() ? {} : Object.fromEntries(state.members.filter((x) => x.seat).map((x) => [x.seat, x]));
+  $("members").replaceChildren(...state.members.map((m) => {
+    const name = el("input", { value: m.name, maxLength: 20 });
+    name.addEventListener("change", () => act(() => api("PATCH", `/api/admin/members/${m.id}`, { name: name.value }), "名前を変えました"));
+    const nameBox = el("div", {}, name, el("div", { className: "sub" }, `/me/${m.id}`, m.sample ? el("span", { className: "tag", textContent: "サンプル" }) : ""));
+
+    const seat = el("select", { title: free() ? "いつもの席" : "席" });
+    if (free() || !seatOf(m)) seat.append(el("option", { value: "", textContent: free() ? "いつもの席なし" : "席なし", selected: !seatOf(m) }));
+    for (const s of state.seats) {
+      const h = taken[s];
+      seat.append(el("option", { value: s, textContent: h && h.id !== m.id ? `${s}（${h.name}${h.sample ? "・サンプル" : ""}）` : free() ? `いつも ${s}` : s,
+        selected: s === seatOf(m), disabled: !!h && h.id !== m.id && !h.sample }));
+    }
+    seat.addEventListener("change", () => act(() => api("PATCH", `/api/admin/members/${m.id}`, { seat: seat.value || null }), "席を変えました"));
+
+    const card = el("div", { className: "cardst" });
+    if (m.card) {
+      const off = el("button", { className: "link", textContent: "外す" });
+      off.addEventListener("click", () => {
+        if (confirm(`${m.name} さんのカードを外しますか？（そのカードは使えなくなります）`)) act(() => api("PATCH", `/api/admin/members/${m.id}`, { card: null }), "カードを外しました");
+      });
+      card.append(el("b", { textContent: "カードあり" }), off);
+    } else card.append(el("span", { className: "no", textContent: "カードなし" }));
+
+    const del = el("button", { className: "btn", textContent: "消す" });
+    del.addEventListener("click", () => {
+      if (confirm(`${m.name} さんを名簿から消しますか？\n在席・ひとりごと・カード・専用の Dial の設定も消えます。元に戻せません。`))
+        act(() => api("DELETE", `/api/admin/members/${m.id}`), "消しました");
+    });
+    return el("div", { className: "item member" }, nameBox, seat, card, del);
+  }));
+}
+
+async function loadDials() {
+  try { dials = await (await fetch("/api/dials")).json(); } catch {}
+  renderDials();
+}
+
+Denno.subscribe((s) => { state = s; renderMode(); renderMembers(); loadDials(); }, $("conn"));
+setInterval(loadDials, 10000);
+</script>
+</body>
+</html>

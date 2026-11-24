@@ -40,6 +40,34 @@
 .orig .list .chip button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; line-height: 1; }
 .orig .list .chip button:hover { color: var(--danger); }
 .back { font-size: 13px; color: var(--ok); margin-top: 6px; }
+
+/* 席（フリーアドレス）：上が奥の列 B、下が手前の列 A（オフィスの見え方と同じ） */
+.seatmap { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.seatmap .desk { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--line); margin: 2px 6px; }
+.seatbtn {
+  border: 1px dashed var(--line); background: transparent; border-radius: 12px; padding: 8px 10px; min-height: 58px;
+  text-align: left; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.seatbtn:hover:not(:disabled) { border-color: var(--accent); }
+.seatbtn .code { font-family: var(--font-mono); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 4px; }
+.seatbtn .dial { font-family: var(--font-body); font-size: 10px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; }
+.seatbtn .who { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seatbtn.free .who { color: var(--accent); font-weight: 400; }
+.seatbtn.taken { border-style: solid; background: var(--panel-2); cursor: default; }
+.seatbtn.taken .who { color: var(--muted); }
+.seatbtn.mine { border-style: solid; border-color: var(--glow); background: var(--panel-2); box-shadow: 0 0 0 1px var(--glow), 0 0 16px rgba(127, 162, 255, .3); cursor: default; }
+.seatbtn:disabled { opacity: 1; }
+.seatbtn:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+.cardstate { font-size: 14px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cardstate .ok { color: var(--ok); font-weight: 700; }
+#cardCode { font-family: var(--font-mono); letter-spacing: .3em; max-width: 12em; }
+.welcome { border-color: var(--glow); box-shadow: 0 0 18px rgba(127, 162, 255, .2); }
+.welcome p { margin: 0; }
+.dials { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.dials:empty { display: none; }
+.dials li { display: flex; gap: 10px; align-items: center; justify-content: space-between; border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+.dials small { font-family: var(--font-mono); color: var(--muted); font-size: 11px; margin-left: 6px; }
 .inputrow { display: flex; gap: 8px; align-items: stretch; }
 .inputrow input {
   flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--panel-2);
@@ -139,11 +167,16 @@
   <section class="card" id="picker" hidden>
     <h2>あなたはどなたですか？</h2>
     <div class="pick" id="pickList"></div>
-    <p class="hint">選んだページをブックマークしておくと、次からすぐ開けます。</p>
+    <p class="hint">選んだページをブックマークしておくと、次からすぐ開けます。はじめての人は <a href="/join">登録</a> から。</p>
   </section>
 
   <!-- マイページ（/me/<id>） -->
   <div id="mine" hidden>
+    <section class="card welcome" id="welcome" hidden>
+      <h2>登録できました</h2>
+      <p>最後に、オフィスで座るキャラを下の「キャラ」から選んでください。「パーツで作成」のタブでは自分で作れます。</p>
+    </section>
+
     <section class="card hero">
       <div id="heroAvatar"></div>
       <div>
@@ -153,10 +186,36 @@
           <button class="presence" id="presence" aria-pressed="false">
             <span class="knob" aria-hidden="true"></span><span id="presenceLabel">不在</span>
           </button>
+          <button class="btn" id="leave" hidden>帰る（席を空ける）</button>
         </div>
         <p class="back" id="backHint" hidden></p>
         <p class="hint" id="resetHint"></p>
       </div>
+    </section>
+
+    <section class="card" id="seatCard" hidden>
+      <h2>席（フリーアドレス）</h2>
+      <div class="seatmap" id="seatmap"></div>
+      <p class="hint">空いている席を押すと、今日はそこに座ります。「Dial」の印がある机は、机の Dial にカードをかざしても座れます（もう一度かざすと帰る）。席の NFC タグにスマホでタッチしても座れます。</p>
+    </section>
+
+    <section class="card">
+      <h2>カード</h2>
+      <div class="cardstate" id="cardState"></div>
+      <div class="inputrow">
+        <input id="cardCode" type="text" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off" aria-label="Dial に出た4桁の数字">
+        <button class="btn primary" id="cardLink" disabled>このカードにする</button>
+      </div>
+      <div class="codestat" id="codeStat"></div>
+      <label class="check" id="claimRow" hidden><input type="checkbox" id="claim" checked> この Dial を自分専用にする（ほかの人のカードは受け付けなくなります）</label>
+      <p class="hint" id="cardHint"></p>
+      <ul class="dials" id="dials"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Dial の言葉</h2>
+      <span class="seg" id="langs" role="group" aria-label="Dial の言葉"></span>
+      <p class="hint" id="langHint"></p>
     </section>
 
     <section class="card">
@@ -177,7 +236,7 @@
           <button class="btn primary" id="send">出す</button>
         </div>
       </div>
-      <p class="hint">StopWatch の吹き出しに見えるのは先頭5文字くらいです。不在のあいだは吹き出しは出ません。</p>
+      <p class="hint">StopWatch の吹き出しに見えるのは先頭5文字くらいです。在席にしていないあいだは吹き出しは出ません。</p>
       <div class="orig">
         <h3>オリジナル</h3>
         <div class="list" id="origList"></div>
@@ -189,7 +248,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="charaCard">
       <h2>キャラ</h2>
       <div class="tabs" id="authorTabs" role="tablist" aria-label="作成者"></div>
       <div class="chars" id="chars" role="tabpanel"></div>
@@ -261,7 +320,7 @@ function renderPicker() {
     a.href = `/me/${m.id}`;
     const name = document.createElement("div");
     name.innerHTML = `<small></small><span></span>`;
-    name.querySelector("small").textContent = m.seat;
+    name.querySelector("small").textContent = state.mode !== "free" ? (m.seat || "席なし") : m.seat ? `${m.seat}${m.present ? "" : " 離席"}` : "—";
     name.querySelector("span").textContent = m.name;
     a.append(Denno.avatar(m.character), name);
     return a;
@@ -279,11 +338,17 @@ function renderMine() {
   }
   document.title = `${m.name}さんのマイページ｜電脳オフィス`;
   $("heroName").textContent = `${m.name} さん`;
-  $("heroSeat").textContent = `席 ${m.seat}`;
+  const free = state.mode === "free";
+  $("heroSeat").textContent = free ? (m.seat ? `今日の席 ${m.seat}` : "まだ席に座っていません")
+    : m.seat ? `席 ${m.seat}` : "席が決まっていません（管理 /admin で決めます）";
   $("heroAvatar").replaceChildren(Denno.avatar(m.character));
+  renderLangs(m);
   $("presence").setAttribute("aria-pressed", String(m.present));
-  $("presenceLabel").textContent = m.present ? "在席中" : "不在";
-  $("resetHint").textContent = `押し忘れても、毎晩 ${state.resetAt} に自動で不在に戻ります。`;
+  $("presenceLabel").textContent = m.present ? "在席中" : free && m.seat ? "離席中" : "不在";
+  $("leave").hidden = !free || !m.seat;
+  $("seatCard").hidden = !free;
+  $("resetHint").textContent = free ? `帰るのを忘れても、毎晩 ${state.resetAt} に自動で席が空きます。`
+    : `押し忘れても、毎晩 ${state.resetAt} に自動で不在に戻ります。`;
   $("backHint").hidden = m.present || !m.back;
   $("backHint").textContent = m.back ? `${m.back} に戻る予定` : "";
 
@@ -292,7 +357,7 @@ function renderMine() {
     const b = document.createElement("div");
     b.className = "bubble";
     b.innerHTML = "<small></small><span></span>";
-    b.querySelector("small").textContent = `${m.seat} ${m.name}`;
+    b.querySelector("small").textContent = `${m.seat || ""} ${m.name}`.trim();
     b.querySelector("span").textContent = m.comment.text;
     const left = document.createElement("span");
     left.className = "left";
@@ -305,6 +370,14 @@ function renderMine() {
     now.replaceChildren(e);
   }
   $("clear").disabled = !m.comment;
+  if (free) renderSeats(m);
+  $("cardState").replaceChildren(...(m.card ? [
+    Object.assign(document.createElement("span"), { className: "ok", textContent: "カード登録ずみ" }),
+    Object.assign(document.createElement("button"), { className: "btn", id: "cardUnlink", textContent: "カードを外す", onclick: unlinkCard }),
+  ] : [Object.assign(document.createElement("span"), { textContent: "まだカードを登録していません" })]));
+  $("cardHint").textContent = free
+    ? "まだ登録していないカードを、どれかの Dial にかざすと 4 桁の数字が出ます。その数字を入れると、そのカードがあなたのものになります（10 分以内）。前のカードは使えなくなります。"
+    : "新しいカードを Dial にかざすと 4 桁の数字が出ます。それを入れると、そのカードに切り替わります（10 分以内。前のカードは使えなくなります）。まだ誰のものでもない Dial に登録済みのカードをかざして、つまみを長押ししても自分専用にできます。";
 
   // 定型文（見出しごと）。オリジナルが変わったら並べ直す
   const origs = m.originals || [];
@@ -358,6 +431,25 @@ function renderMine() {
     updateCount();
   }
   renderChars();
+}
+
+// Dial の言葉。押すとすぐ変わる（Dial には次の同期、3 秒ほどで届く）
+function renderLangs(m) {
+  const box = $("langs");
+  if (box.children.length !== (state.langs || []).length) {
+    box.replaceChildren(...(state.langs || []).map((l) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.id = l.id;
+      b.textContent = l.label;
+      b.addEventListener("click", () => { if (me() && me().lang !== l.id) send({ lang: l.id }, `Dial の言葉を ${l.label} にしました`); });
+      return b;
+    }));
+  }
+  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.id === m.lang));
+  $("langHint").textContent = state.mode === "free"
+    ? "机の Dial は、そこに座っている人の言葉で出ます（ひとこと選び・タイマー・不在の札など）。だれも座っていない机と、カード登録などの案内は日本語です。"
+    : "自分専用の Dial は、ここで選んだ言葉で出ます（ひとこと選び・タイマー・不在の札など）。全体用の Dial はいつも日本語です。";
 }
 
 function renderDurations() {
@@ -468,10 +560,135 @@ function send(body, okMsg) {
   return queue;
 }
 
+// 席の図。だれも座っていない席を押すとそこに座る
+function renderSeats(m) {
+  const seats = state.seats || [];
+  const rows = [seats.filter((c) => c[0] === "B"), seats.filter((c) => c[0] === "A")];
+  const btn = (code) => {
+    const who = state.members.find((x) => x.seat === code);
+    const b = document.createElement("button");
+    b.className = "seatbtn " + (!who ? "free" : who.id === m.id ? "mine" : "taken");
+    b.innerHTML = '<span class="code"><span></span></span><span class="who"></span>';
+    b.querySelector(".code span").textContent = code;
+    if ((state.desks || []).includes(code)) b.querySelector(".code").append(Object.assign(document.createElement("span"), { className: "dial", textContent: "Dial" }));
+    b.querySelector(".who").textContent = !who ? "空き" : who.id === m.id ? "あなた" : `${who.name}${who.present ? "" : "（離席）"}`;
+    b.disabled = !!who;
+    b.setAttribute("aria-label", `${code} ${b.querySelector(".who").textContent}`);
+    b.addEventListener("click", () => send({ seat: code }, `${code} に座りました`));
+    return b;
+  };
+  $("seatmap").replaceChildren(...rows[0].map(btn), Object.assign(document.createElement("div"), { className: "desk" }), ...rows[1].map(btn));
+}
+
+// ---------- カードと Dial ----------
+let codeInfo = null; // { canClaim, usedBy } 番号を確かめられたとき
+let checking = 0;
+
+async function cardRequest(method, body) {
+  const res = await fetch(`/api/members/${encodeURIComponent(myId)}/card`, {
+    method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `エラー (${res.status})`);
+  state = json;
+  renderMine();
+}
+
+// 4 桁そろったら、その番号のカードを確かめる（ほかの人のカードではないか・Dial を自分専用にできるか）
+async function checkCode() {
+  const code = $("cardCode").value.replace(/\D/g, "");
+  $("cardCode").value = code;
+  codeInfo = null;
+  $("claimRow").hidden = true;
+  $("cardLink").disabled = true;
+  const st = $("codeStat");
+  st.className = "codestat";
+  if (code.length < 4) { st.textContent = ""; return; }
+  const my = ++checking;
+  st.textContent = "確かめています…";
+  try {
+    const res = await fetch(`/api/codes/${code}`);
+    const json = await res.json();
+    if (my !== checking) return;
+    if (!res.ok) throw new Error(json.error);
+    if (json.usedBy && json.usedBy.id !== myId) throw new Error(`このカードはもう ${json.usedBy.name} さんが使っています`);
+    codeInfo = json;
+    st.classList.add("ok");
+    st.textContent = json.usedBy ? "今のカードと同じです" : "カードが見つかりました";
+    $("claimRow").hidden = !json.canClaim;
+    $("cardLink").disabled = false;
+  } catch (e) {
+    if (my !== checking) return;
+    st.classList.add("ng");
+    st.textContent = e.message || "確かめられませんでした";
+  }
+}
+
+async function linkCard() {
+  if (!codeInfo) return;
+  $("cardLink").disabled = true;
+  try {
+    await cardRequest("POST", { code: $("cardCode").value, claimDial: codeInfo.canClaim && $("claim").checked });
+    $("cardCode").value = "";
+    checkCode();
+    loadDials();
+    Denno.toast("カードを登録しました");
+  } catch (e) {
+    Denno.toast(e.message, true);
+    $("cardLink").disabled = false;
+  }
+}
+async function unlinkCard() {
+  if (!confirm("このカードを外しますか？外すと、そのカードは使えなくなります。")) return;
+  try { await cardRequest("DELETE"); Denno.toast("カードを外しました"); }
+  catch (e) { Denno.toast(e.message, true); }
+}
+$("cardCode").addEventListener("input", checkCode);
+$("cardLink").addEventListener("click", linkCard);
+$("cardCode").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) linkCard(); });
+
+// 自分専用の Dial（固定席）
+async function loadDials() {
+  if (!myId || (state && state.mode === "free")) { $("dials").replaceChildren(); return; }
+  let list = [];
+  try { list = await (await fetch("/api/dials")).json(); } catch {}
+  $("dials").replaceChildren(...list.filter((d) => d.owner === myId).map((d) => {
+    const li = document.createElement("li");
+    const t = document.createElement("span");
+    t.textContent = `${d.label || "Dial"}（自分専用）`;
+    const mac = document.createElement("small");
+    mac.textContent = `${d.mac.slice(-4).toUpperCase()}${d.online ? "・つながっています" : ""}`;
+    t.append(mac);
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = "専用をやめる";
+    b.addEventListener("click", async () => {
+      if (!confirm("この Dial を自分専用でなくしますか？（まだ誰のものでもない Dial に戻ります）")) return;
+      const res = await fetch(`/api/dials/${d.mac}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "none" }) });
+      if (res.ok) { Denno.toast("専用をやめました"); loadDials(); } else Denno.toast("変えられませんでした", true);
+    });
+    li.append(t, b);
+    return li;
+  }));
+}
+
 $("presence").addEventListener("click", () => {
-  const next = !me().present;
-  send({ present: next }, next ? "在席にしました" : "不在にしました");
+  const m = me();
+  if (state.mode !== "free") {
+    const next = !m.present;
+    send({ present: next }, next ? "在席にしました" : "不在にしました");
+    return;
+  }
+  // フリーアドレスで席が無いとき：いつもの席があればサーバがそこに座らせる。無ければ席の図へ
+  if (!m.seat && !m.homeSeat) {
+    Denno.toast("先に座る席を選んでください", true);
+    $("seatCard").scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  const next = !m.present;
+  send({ present: next }, next ? "在席にしました" : "離席にしました");
 });
+$("leave").addEventListener("click", () => send({ seat: null }, "席を空けました。おつかれさまでした"));
 $("text").addEventListener("input", updateCount);
 $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && !$("send").disabled) $("send").click(); });
 $("send").addEventListener("click", async () => {
@@ -495,11 +712,18 @@ async function loadCharacters() {
 }
 
 // ---------- 起動 ----------
+if (myId && new URLSearchParams(location.search).has("welcome")) {
+  $("welcome").hidden = false;
+  history.replaceState(null, "", `/me/${myId}`);
+  setTimeout(() => $("charaCard").scrollIntoView({ behavior: "smooth", block: "start" }), 600);
+}
 loadCharacters();
-window.addEventListener("focus", loadCharacters);
+window.addEventListener("focus", () => { loadCharacters(); loadDials(); });
+let firstState = true;
 Denno.subscribe((s) => {
   state = s;
   if (myId) renderMine(); else renderPicker();
+  if (firstState) { firstState = false; loadDials(); }
 }, $("conn"));
 setInterval(() => { if (state && myId) renderMine(); }, 30000); // 残り時間の表示を更新
 </script>

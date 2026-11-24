@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>席にタッチ｜電脳オフィス</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+.wrap { max-width: 520px; }
+.result { text-align: center; padding: 28px 18px; }
+.result .seat { font-family: var(--font-mono); font-size: 44px; line-height: 1.1; letter-spacing: .06em; }
+.result .msg { font-size: 22px; font-weight: 700; margin-top: 10px; }
+.result .who { color: var(--muted); font-size: 14px; margin-top: 4px; }
+.result.sit { border-color: var(--ok); box-shadow: 0 0 24px rgba(126, 224, 184, .18); }
+.result.sit .msg { color: var(--ok); }
+.result.leave .msg { color: var(--muted); }
+.result.err .msg { color: var(--danger); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
+.pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.pick button {
+  display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 8px; color: var(--fg);
+}
+.pick button:hover { border-color: var(--accent); }
+.pick small { display: block; font-family: var(--font-mono); color: var(--muted); font-size: 11px; }
+.urls { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.urls li { display: flex; gap: 10px; align-items: center; justify-content: space-between; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.urls code { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>電脳オフィス / <b>席にタッチ</b></h1>
+    <nav>
+      <a href="/">オフィスを見る</a>
+      <a href="/me" id="mypage">マイページ</a>
+    </nav>
+  </header>
+
+  <!-- /tap/<席>：結果 -->
+  <section class="card result" id="result" hidden>
+    <div class="seat" id="rSeat"></div>
+    <div class="msg" id="rMsg"></div>
+    <div class="who" id="rWho"></div>
+    <div class="actions" id="rActions"></div>
+  </section>
+
+  <!-- このスマホはだれの？（初めてのとき） -->
+  <section class="card" id="picker" hidden>
+    <h2>このスマホはどなたのですか？</h2>
+    <div class="pick" id="pickList"></div>
+    <p class="hint">一度選ぶと、このスマホが覚えます。次からはタグにかざすだけです。</p>
+  </section>
+
+  <!-- /tap：タグに書き込む URL -->
+  <section class="card" id="howto" hidden>
+    <h2>NFC タグに書き込む URL</h2>
+    <ul class="urls" id="urls"></ul>
+    <p class="hint">「NFC Tools」などのアプリで、席ごとのタグに「URL」として書き込んで机に貼ります。スマホをかざすとその席に座り、もう一度かざすと帰ります（席が空く）。離席中にかざすと在席に戻ります。</p>
+    <p class="hint">スマホは会社の Wi-Fi につないでおいてください。この Mac の IP アドレスが変わると URL も変わるので、IP は固定しておくのがおすすめです。</p>
+  </section>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const seat = (location.pathname.match(/^\/tap\/([A-Z0-9]+)$/) || [])[1] || null;
+const done = new URLSearchParams(location.search).has("done"); // 再読み込みでもう一度切り替わらないように
+let state = null;
+
+function getMe() { try { return localStorage.getItem("denno.me"); } catch { return null; } }
+function setMe(id) { try { id ? localStorage.setItem("denno.me", id) : localStorage.removeItem("denno.me"); } catch {} }
+function member(id) { return state && state.members.find((m) => m.id === id); }
+
+function button(label, onClick, primary) {
+  const b = document.createElement("button");
+  b.className = primary ? "btn primary" : "btn";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function show(kind, msg, who, actions = []) {
+  $("picker").hidden = true;
+  const r = $("result");
+  r.hidden = false;
+  r.className = `card result ${kind}`;
+  $("rSeat").textContent = seat || "";
+  $("rMsg").textContent = msg;
+  $("rWho").textContent = who || "";
+  $("rActions").replaceChildren(...actions);
+}
+
+function showPicker() {
+  $("result").hidden = true;
+  $("picker").hidden = false;
+  $("pickList").replaceChildren(...state.members.map((m) => {
+    const b = document.createElement("button");
+    const name = document.createElement("div");
+    name.innerHTML = "<small></small><span></span>";
+    name.querySelector("small").textContent = m.seat || "—";
+    name.querySelector("span").textContent = m.name;
+    b.append(Denno.avatar(m.character), name);
+    b.addEventListener("click", () => { setMe(m.id); tap(); });
+    return b;
+  }));
+}
+
+const others = () => button("別の人です", () => { setMe(null); showPicker(); });
+
+// 今の状態だけを見せる（再読み込みのとき）
+function showNow() {
+  const m = member(getMe());
+  if (!m) return showPicker();
+  $("mypage").href = `/me/${m.id}`;
+  const here = m.seat === seat;
+  const msg = here ? (m.present ? "この席に座っています" : "この席で離席中") : m.seat ? `いまは ${m.seat} の席です` : "まだ席に座っていません";
+  const act = here ? (m.present ? "帰る（席を空ける）" : "在席に戻る") : "この席に座る";
+  show(here && m.present ? "sit" : "leave", msg, `${m.name} さん`, [button(act, tap, true), others()]);
+}
+
+async function tap() {
+  const id = getMe();
+  if (!member(id)) return showPicker();
+  $("mypage").href = `/me/${id}`;
+  try {
+    const res = await fetch(`/api/members/${encodeURIComponent(id)}/tap`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seat }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `エラー (${res.status})`);
+    state = json.state;
+    history.replaceState(null, "", `${location.pathname}?done`);
+    const name = `${member(id).name} さん`;
+    if (json.action === "sit") {
+      show("sit", "座りました（在席）", name, [button("まちがえた", undo, false), others()]);
+    } else if (json.action === "back") {
+      show("sit", "おかえりなさい（在席）", name, [others()]);
+    } else {
+      show("leave", "帰りました（席を空けました）", name, [button("まちがえた（座り直す）", tap, false), others()]);
+    }
+  } catch (e) {
+    show("err", e.message, "", [button("もう一度", tap, true)]);
+  }
+}
+
+async function undo() {
+  try {
+    state = await Denno.patch(getMe(), { present: false, seat: null });
+    show("leave", "取り消しました（席を空けました）", `${member(getMe()).name} さん`, [button("やっぱり座る", tap, true), others()]);
+  } catch (e) { Denno.toast(e.message, true); }
+}
+
+function showHowto() {
+  $("howto").hidden = false;
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+    Denno.toast("スマホから開ける社内LAN のアドレス（サーバ起動時に出る http://192.168…）でこのページを開き直してください", true);
+  }
+  $("urls").replaceChildren(...state.seats.map((s) => {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = `${location.origin}/tap/${s}`;
+    li.append(code, button("コピー", () => {
+      navigator.clipboard.writeText(code.textContent).then(() => Denno.toast("コピーしました"), () => Denno.toast("コピーできませんでした", true));
+    }));
+    return li;
+  }));
+}
+
+(async () => {
+  try {
+    state = await (await fetch("/api/state", { cache: "no-store" })).json();
+  } catch {
+    return show("err", "サーバにつながりません", "会社の Wi-Fi につながっているか確かめてください", [button("もう一度", () => location.reload(), true)]);
+  }
+  if (state.mode !== "free") return show("err", "いまは固定席です", "NFC タグで座るのは、サーバを SEAT_MODE=free（フリーアドレス）で起動したときだけです");
+  if (!seat) return showHowto();
+  if (!state.seats.includes(seat)) return show("err", "この席はありません", `席は ${state.seats.join(" / ")} です`);
+  if (done) return showNow();
+  tap();
+})();
+</script>
+</body>
+</html>

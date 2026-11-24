@@ -9,6 +9,18 @@
 // 毎フレーム
 //   背景コピー → 奥の列(B) → 手前の列(A) のキャラ → 不在タグ・吹き出し → 画面へ転送
 //
+// Dial の役割（サーバの /admin で決める。/api/device の #dial 行で届く。サーバの SEAT_MODE で使える役割が変わる）
+//   固定席（SEAT_MODE=fixed）
+//     全体用 : 登録したカードなら誰でも、その人の 在席 / 不在。つまみ・タップは席を選んで名前を見るだけ
+//     個人用 : 持ち主のカードだけ受け付ける。つまみの長押し・押す・タップは持ち主の席の操作。持ち主が不在のあいだ背景がゆっくり光る
+//     未設定 : 全体用と同じ。登録済みのカードをかざした直後に長押しすると、その人の専用（個人用）になる
+//   フリーアドレス（SEAT_MODE=free）
+//     机     : Dial を置いた机。カードをかざす → 今日はこの席に座る / 離席から戻る / もう一度で帰る（席が空く）
+//              押す・タップ・長押しは、この机に座っている人の操作
+//     未設定 : 机が決まっていない（画面下に Dial の番号＝MAC の下 4 桁。/admin でこの番号の Dial に机を決める）
+//   どの役割でも、未登録のカードをかざすと 4 桁の番号が出る → /join かマイページの「カード」に入れると、そのカードがその人のものになる
+//   カードは Dial に入っている読み取り部品（WS1850S、MFRC522 と同じ使い方）で読む。MIFARE などの ISO14443A だけ
+//
 // サーバ連携（../denno_config.h に Wi-Fi を書いたとき。StopWatch と同じ設定ファイルを使う）
 //   ネット用のタスク（コア0）が POLL_MS ごとにサーバの /api/device?board=dial を取りに行き、在席・名前・ひとりごとを反映する。
 //   端末での操作はサーバへ PATCH で送る。画面の描画（コア1）は通信で止まらない。
@@ -16,14 +28,20 @@
 //   キャラ：マイページで選んだキャラの Dial 用のはんこ（server/sprites/<cid>/dial/<席>.bin）を、変わった席だけ取り寄せる。
 //   届くまで・取れないときは、ファームに入っている絵（office_art_dial.h）で描く。
 //
-// 操作
-//   つまみを回す  : 操作する席を選ぶ（島のまわりを時計回り）
-//   つまみを押す  : 選択中の席の「ひとこと選び」を開く（下の「ひとこと選び」）
-//   つまみを長押し: 選択中の席の 在席 / 不在 を切り替え
-//   画面タップ    : タップした席の 在席 / 不在 を切り替え
-//   画面を長押し  : 長押しした席の「ひとこと選び」を開く
-//   シリアル(115200): "p 3" 席3の在席切替 / "c 3 寒い…" 席3にコメント / "c 3" 席3のコメントを消す
+// 操作（「この Dial の席」= 個人用なら持ち主の席、机ならその机。Wi-Fi なしのお試しでは、つまみで選んだ席）
+//   カードをかざす: 上の「Dial の役割」
+//   つまみを回す  : 席を選んで名札を見る（固定席の全体用・未設定と、お試しのとき）
+//   つまみを押す・画面タップ: この Dial の席の人の「ひとこと選び」を開く（下の「ひとこと選び」）。全体用・未設定はタップで席を選ぶ
+//   つまみを長押し: この Dial の席の 在席 / 不在（フリーアドレスは 離席。席は取ったまま）
+//   お試し（Wi-Fi なし）: つまみで席を選び、押す=ひとこと選び・長押し=在席 / 不在、タップ=その席の在席 / 不在、画面の長押し=その席のひとこと
+//   シリアル(115200): "p 3" 席3の在席切替 / "c 3 寒い…" 席3にコメント / "c 3" 席3のコメントを消す / "l en" 言語（ja / en / zh。試す用）
+//
+// 言語：個人用の Dial は持ち主、机の Dial は座っている人がマイページで選んだ言語（/api/device の #dial 行の 5 列目）。
+// 全体用・未設定の Dial は日本語。Dial に言語を選ぶ操作は無い。
+// 日本語のフォントに無い字（中国語の简体字など）を含む文字列は、中国語のフォント（efontCN）で描く。
+//                     "k 04A1B2C3" その番号のカードをかざしたことにする（カードなしで試す）
 #include <M5Unified.h>
+#include <M5Dial.h>  // カードの読み取り（M5Dial.Rfid）だけ使う。つまみは下の自前の割り込みで読む
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ESPmDNS.h>
@@ -59,6 +77,9 @@ struct SeatState {
   uint32_t localUntil;  // 端末で変えた直後はサーバの古い状態で上書きしない
   DynArt* art;          // 取り寄せたはんこ（nullptr ならファームに入っている絵）
   String back;          // 戻る時刻（"16:00"。不在タグに出す）
+  int8_t tGen;          // 時間のひとことのジャンル（GEN の番号 + 1。0 なら無し）
+  uint32_t tEnd;        // その終わり（millis）
+  uint32_t tTotal;      // 全体の長さ（秒。タイマー画面の輪の長さ）
 };
 
 // 名前とコメントはサンプル（サーバにつながると置き換わる）
@@ -73,6 +94,96 @@ static SeatState S[6] = {
 static const int ORIG_MAX = 10;
 static String orig[6][ORIG_MAX];  // 席ごとのオリジナル（マイページで登録した文。/api/device の #o 行）
 static int origN[6];
+
+// ---------- 言語 ----------
+// ひとこと選び・不在タグ・タイマー・自分の在席の知らせに出る文字（Dial の設定・登録の案内は日本語のまま）。
+// %s には時刻やジャンル名が入る。島の画面の吹き出しは最大 84px なので、コメントになる文は短めに
+struct LangText {
+  const char* code;
+  const char* genre[10];  // ジャンル名（GEN と同じ順）
+  const char* temp[4];    // 気温
+  const char* plan[3];    // 予定
+  const char* talk[4];    // 声かけ
+  const char* unitUntil;  // 集中・休憩・会議の「60 分」
+  const char* unitAfter;  // 外出の「10 分後」
+  const char* labelUntil; // 「〜15:45 まで」
+  const char* labelAfter; // 「14:55 に外出」
+  const char* labelBack;  // 戻りの時刻の下
+  const char* cmtUntil;   // 送るコメント「集中 〜15:45」（ジャンル名, 時刻）
+  const char* cmtAfter;   // 送るコメント「14:55 外出」
+  const char* away;       // 不在タグ（固定席）
+  const char* awayFree;   // 不在タグ（フリーアドレスの離席）
+  const char* awayBack;   // 不在タグ「16:00戻り」
+  const char* noOrig[2];  // オリジナルが無いとき
+  const char* tLeft;      // タイマー「休憩 のこり」
+  const char* tOut;       // 「外出まで」
+  const char* tBack;      // 「戻りまで」
+  const char* tDone;      // 0 になった
+  const char* tDoneOut;   // 外出の 0
+  const char* tNone[2];   // タイマーが無いとき
+  const char* san;        // 名前のあと（" さん"）
+  const char* present;    // 在席
+  const char* hello;      // おはよう
+  const char* bye;        // おつかれさま
+  const char* welcome;    // おかえり
+  const char* seeYou;     // いってらっしゃい
+  const char* keepSeat;   // 席はそのままです
+  const char* setIn;      // 在席にしました
+  const char* setOut;     // 不在にしました
+  const char* freed;      // 席を空けました
+  const char* sat;        // 「A1 に座りました」
+};
+static const LangText LANGS[] = {
+  {"ja",
+   {"集中", "休憩", "会議", "外出", "戻り", "気温", "予定", "声かけ", "オリジナル", "消す"},
+   {"寒い", "ちょっと寒い", "ちょっと暑い", "暑い"},
+   {"午後から会議", "定時で帰ります", "明日はお休み"},
+   {"話しかけOK", "手が空いてます", "雑談したい", "あとで返事します"},
+   "分", "分後", "〜%s まで", "%s に外出", "に戻ります",
+   "%s 〜%s", "%s 外出", "不在", "離席", "%s戻り",
+   {"マイページの", "「オリジナル」で足せます"},
+   "%s のこり", "外出まで", "戻りまで", "時間です", "出かける時間", {"タイマーなし", "集中・休憩などを選ぶと出ます"},
+   " さん", "在席", "おはよう", "おつかれさま", "おかえり", "いってらっしゃい", "席はそのままです",
+   "在席にしました", "不在にしました", "席を空けました", "%s に座りました"},
+  {"en",
+   {"Focus", "Break", "Meeting", "Out", "Back", "Temp", "Plans", "Chat", "Custom", "Clear"},
+   {"Cold", "A bit cold", "A bit hot", "Hot"},
+   {"PM meetings", "Leaving on time", "Off tomorrow"},
+   {"Free to talk", "I'm free now", "Up for a chat", "Will reply later"},
+   "min", "min", "until %s", "out at %s", "I'll be back",
+   "%s ~%s", "Out %s", "Away", "Stepped out", "back %s",
+   {"Add your own in", "My Page > Custom"},
+   "%s left", "Until out", "Until back", "Time's up", "Time to go", {"No timer", "Pick Focus, Break, etc."},
+   "", "In", "Good morning", "Good work", "Welcome back", "See you", "Seat kept",
+   "Marked in", "Marked away", "Seat freed", "Sat at %s"},
+  {"zh",
+   {"专注", "休息", "开会", "外出", "回来", "温度", "安排", "交流", "自定义", "清除"},
+   {"好冷", "有点冷", "有点热", "好热"},
+   {"下午开会", "准时下班", "明天休息"},
+   {"随时找我", "现在有空", "想聊聊天", "稍后回复"},
+   "分钟", "分钟后", "到 %s", "%s 外出", "回来",
+   "%s至%s", "%s 外出", "不在", "暂离", "%s回来",
+   {"可在我的页面的", "「自定义」中添加"},
+   "%s 剩余", "距离外出", "距离回来", "时间到了", "该出发了", {"没有计时", "选择专注、休息等即可显示"},
+   "", "在座", "早上好", "辛苦了", "欢迎回来", "慢走", "座位已保留",
+   "已设为在座", "已设为不在", "已空出座位", "已坐在 %s"},
+};
+static const int LANG_N = sizeof(LANGS) / sizeof(LANGS[0]);
+static int lang = 0;  // サーバの #dial 行で変わる（全体用・未設定は 0 = 日本語）
+static int langForced = -1;  // シリアルの "l en"（試す用。電源を切ると戻る）
+static const LangText& L() { return LANGS[langForced >= 0 ? langForced : lang]; }
+
+static int langIndex(const String& code) {
+  for (int k = 0; k < LANG_N; k++) if (code.equalsIgnoreCase(LANGS[k].code)) return k;
+  return -1;
+}
+
+// "%s" を a, b で埋める
+static String fmt(const char* f, const String& a, const String& b = String()) {
+  char buf[96];
+  snprintf(buf, sizeof(buf), f, a.c_str(), b.c_str());
+  return buf;
+}
 // サーバの時計（/api/device の #now 行）。まだ届いていなければ 12:00 から数える
 static int32_t srvSec = -1;
 static uint32_t srvAt = 0;
@@ -90,16 +201,36 @@ static const BubblePos BUB[6] = {
   {166,  40, 154,  59},   // B3
 };
 static const int DRAW_ORDER[6] = {3, 4, 5, 0, 1, 2};  // 奥 → 手前
+
 static const int DIAL_ORDER[6] = {3, 4, 5, 2, 1, 0};  // つまみで選ぶ順（B1 → B2 → B3 → A3 → A2 → A1、島のまわりを時計回り）
 
-static int selected = 0;
+// この Dial の役割（サーバの #dial 行）。届くまでは ROLE_UNKNOWN
+enum DialRole { ROLE_UNKNOWN, ROLE_NONE, ROLE_SHARED, ROLE_PERSONAL, ROLE_DESK };
+static DialRole role = ROLE_UNKNOWN;
+static int roleSeat = -1;       // 個人用：持ち主の席 / 机：置いた机（S の番号）。-1 = なし
+static String ownerName;        // 個人用の持ち主
+static bool freeMode = false;   // サーバがフリーアドレス（#mode 行）
+static int selected = 0;        // つまみで選んでいる席（全体用・未設定・お試し）
+static String macTail;          // MAC の下 4 桁（/admin の一覧と見比べる）
 static int frameIdx = 0;
 static uint32_t nextTick = 0;
-static uint32_t nameUntil = 0;  // つまみで選んだ直後だけ、その席に名札を出す
+static uint32_t nameUntil = 0;  // 選んだ・座った直後だけ、その席に名札を出す
 static const uint32_t TICK_MS = 80;
 static const uint32_t LOCAL_HOLD_MS = 4000;
 
 static uint16_t C565(uint8_t r, uint8_t g, uint8_t b) { return canvas.color565(r, g, b); }
+
+static bool netEnabled();
+// この Dial の席：個人用なら持ち主の席、机ならその机。全体用・未設定・お試しはつまみで選んだ席。フリーアドレスの未設定は -1
+static bool ownSeatRole() { return role == ROLE_PERSONAL || role == ROLE_DESK; }
+static int focusSeat() {
+  if (!netEnabled()) return selected;
+  if (ownSeatRole()) return roleSeat;
+  if (freeMode) return -1;
+  return selected;
+}
+// つまみ・タップで席を選べるか（固定席の全体用・未設定、お試し）
+static bool canSelect() { return !netEnabled() || (role != ROLE_UNKNOWN && !freeMode && !ownSeatRole()); }
 
 // ---------- サーバ連携 ----------
 
@@ -111,6 +242,10 @@ static bool inboxNew = false;
 static const int OUT_MAX = 8;
 static String outbox[OUT_MAX];  // 画面側 → ネット側："id<TAB>JSON" の PATCH 待ち
 static int outN = 0;
+static String cardJob;        // 画面側 → ネット側："card<TAB>番号"（POST /api/card 待ち）か "claim<TAB>番号"（/api/card/claim）
+static String cardReply;      // ネット側 → 画面側：その答え（"sit\t佐藤\tA2" など。届かなければ "net"）
+static bool cardReplyNew = false;
+static String macHex;         // この Dial の MAC（12 桁、サーバに送る）
 
 static bool netEnabled() { return strlen(WIFI_SSID) > 0; }
 
@@ -372,6 +507,12 @@ static void netTask(void*) {
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   MDNS.begin("denno-dial");
+  macHex = WiFi.macAddress();
+  macHex.replace(":", "");
+  macHex.toLowerCase();
+  macTail = macHex.substring(8);
+  macTail.toUpperCase();
+  Serial.printf("[net] この Dial の MAC %s（/admin では Dial %s）\n", macHex.c_str(), macTail.c_str());
   String base;
   uint32_t lastPoll = 0;
   int fails = 0;
@@ -387,7 +528,42 @@ static void netTask(void*) {
     if (base.length() == 0) {
       Serial.printf("[net] Wi-Fi OK  IP %s\n", WiFi.localIP().toString().c_str());
       base = resolveBase();
-      if (base.length() == 0) { netState = NET_NO_SERVER; delay(3000); continue; }
+      if (base.length() == 0) {
+        netState = NET_NO_SERVER;
+        xSemaphoreTake(netLock, portMAX_DELAY);
+        if (cardJob.length()) { cardJob = ""; cardReply = "net"; cardReplyNew = true; }
+        xSemaphoreGive(netLock);
+        delay(3000);
+        continue;
+      }
+    }
+
+    // かざされたカードがあれば、いちばん先に送る（答えを画面に出すので待たせない）。cardJob = "card|claim <TAB> 番号"
+    String job0;
+    xSemaphoreTake(netLock, portMAX_DELAY);
+    job0 = cardJob;
+    cardJob = "";
+    xSemaphoreGive(netLock);
+    if (job0.length()) {
+      int tab = job0.indexOf('\t');
+      String path = job0.substring(0, tab) == "claim" ? "/api/card/claim" : "/api/card";
+      String uid = job0.substring(tab + 1);
+      HTTPClient h;
+      h.setConnectTimeout(2000);
+      h.setTimeout(3000);
+      h.begin(base + path);
+      h.addHeader("Content-Type", "application/json");
+      int code = h.POST("{\"mac\":\"" + macHex + "\",\"uid\":\"" + uid + "\"}");
+      String reply = code == 200 ? h.getString() : String("net");
+      h.end();
+      reply.trim();
+      Serial.printf("[net] POST %s %s -> %d %s\n", path.c_str(), uid.c_str(), code, reply.c_str());
+      xSemaphoreTake(netLock, portMAX_DELAY);
+      cardReply = reply;
+      cardReplyNew = true;
+      xSemaphoreGive(netLock);
+      lastPoll = 0;  // 座った・帰ったをすぐ画面に出す
+      continue;
     }
 
     // 送る予約があれば先に送る
@@ -419,7 +595,7 @@ static void netTask(void*) {
     HTTPClient h;
     h.setConnectTimeout(2000);
     h.setTimeout(3000);
-    h.begin(base + "/api/device?board=dial");  // 版の列は Dial 用のはんこの版（Dial 用が無ければ 0）
+    h.begin(base + "/api/device?board=dial&mac=" + macHex);  // 版の列は Dial 用のはんこの版。#dial 行でこの Dial の役割が分かる
     int code = h.GET();
     if (code == 200) {
       String body = h.getString();
@@ -455,7 +631,10 @@ static void splitTabs(const String& line, String* f, int n) {
 
 // 届いた状態を席に反映（画面側で呼ぶ）
 //   席の行 = 席 \t id \t 在席 \t 名前 \t ひとりごと \t キャラ \t 版 \t 戻る時刻（キャラ・版は syncArt が見る）
-//   #now \t サーバの時計（0 時からの秒） / #o \t 席 \t オリジナルの文
+//   #now \t サーバの時計（0 時からの秒） / #o \t 席 \t オリジナルの文 / #mode \t fixed|free
+//   #dial \t 役割（none / shared / personal / desk）\t 席（持ち主の席・置いた机）\t 持ち主の名前
+static int8_t timerGen(const String& kind);  // 下（ひとこと選びのところ）
+
 static void applyInbox() {
   String body;
   xSemaphoreTake(netLock, portMAX_DELAY);
@@ -465,6 +644,8 @@ static void applyInbox() {
 
   uint32_t now = millis();
   int newN[6] = {0};
+  int8_t tGen[6] = {0};
+  uint32_t tLeft[6] = {0}, tTotal[6] = {0};
   int pos = 0;
   while (pos < (int)body.length()) {
     int nl = body.indexOf('\n', pos);
@@ -472,6 +653,32 @@ static void applyInbox() {
     String line = body.substring(pos, nl);
     pos = nl + 1;
     if (line.startsWith("#now\t")) { srvSec = line.substring(5).toInt(); srvAt = now; continue; }
+    if (line.startsWith("#mode\t")) { freeMode = line.substring(6) == "free"; continue; }
+    if (line.startsWith("#dial\t")) {
+      String f[5];
+      splitTabs(line, f, 5);
+      lang = max(0, langIndex(f[4]));  // 個人用は持ち主、机は座っている人の言語。ほかは ja
+      DialRole r = f[1] == "personal" ? ROLE_PERSONAL : f[1] == "desk" ? ROLE_DESK : f[1] == "shared" ? ROLE_SHARED : ROLE_NONE;
+      int rs = -1;
+      for (int i = 0; i < 6; i++) if (f[2] == S[i].code) rs = i;
+      if (r != role || rs != roleSeat) Serial.printf("[dial] 役割 %s %s %s\n", f[1].c_str(), f[2].c_str(), f[3].c_str());
+      if (r == ROLE_PERSONAL || r == ROLE_DESK) { if (rs < 0) r = ROLE_NONE; }
+      role = r;
+      roleSeat = rs;
+      ownerName = f[3];
+      continue;
+    }
+    if (line.startsWith("#t\t")) {  // #t 席 種類 残り秒 全体の秒（時間のひとこと）
+      String f[5];
+      splitTabs(line, f, 5);
+      for (int i = 0; i < 6; i++) {
+        if (f[1] != S[i].code) continue;
+        tGen[i] = timerGen(f[2]);
+        tLeft[i] = f[3].toInt();
+        tTotal[i] = f[4].toInt();
+      }
+      continue;
+    }
     if (line.startsWith("#o\t")) {
       String f[3];
       splitTabs(line, f, 3);
@@ -483,7 +690,7 @@ static void applyInbox() {
     splitTabs(line, f, 8);
     for (int i = 0; i < 6; i++) {
       if (f[0] != S[i].code) continue;
-      S[i].id = f[1];
+      S[i].id = f[1];  // だれも座っていない席は id も名前も空
       S[i].name = f[3];
       if ((int32_t)(now - S[i].localUntil) < 0) continue;  // 端末で変えた直後
       S[i].present = f[2] == "1";
@@ -491,7 +698,13 @@ static void applyInbox() {
       S[i].back = f[7];
     }
   }
-  for (int i = 0; i < 6; i++) origN[i] = newN[i];
+  for (int i = 0; i < 6; i++) {
+    origN[i] = newN[i];
+    if ((int32_t)(now - S[i].localUntil) < 0) continue;
+    S[i].tGen = tGen[i];
+    S[i].tEnd = now + tLeft[i] * 1000;
+    S[i].tTotal = tTotal[i];
+  }
 }
 
 // ---------- 描画 ----------
@@ -524,10 +737,33 @@ static int inCircle(int x, int w, int y, int h) {
   return hi < lo ? r - w / 2 : constrain(x, lo, hi);
 }
 
+// 文字に合うフォントにする（px は 12 / 16 / 20 / 24）。
+// 日本語のフォントに無い字（中国語の简体字など）があれば、中国語のフォント（efontCN）で描く。
+// 中国語のフォントには日本だけの漢字が無いので、文字列ごとに使い分ける。efontCN に 20 は無いので 24 を使う
+static void setFontFor(const String& s, int px = 12) {
+  const lgfx::IFont* ja = px >= 24 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_24
+                        : px >= 20 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_20
+                        : px >= 16 ? (const lgfx::IFont*)&fonts::lgfxJapanGothic_16
+                                   : (const lgfx::IFont*)&fonts::lgfxJapanGothic_12;
+  lgfx::FontMetrics m;
+  for (size_t i = 0; i < s.length();) {
+    uint8_t c = s[i];
+    int n = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4;
+    uint32_t u = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
+    for (int k = 1; k < n && i + k < s.length(); k++) u = (u << 6) | (s[i + k] & 0x3F);
+    i += n;
+    if (u > 0xFFFF) continue;  // 絵文字などはどちらのフォントにも無い
+    if (!ja->updateFontMetric(&m, u)) {
+      canvas.setFont(px >= 20 ? &fonts::efontCN_24 : px >= 16 ? &fonts::efontCN_16 : &fonts::efontCN_12);
+      return;
+    }
+  }
+  canvas.setFont(ja);
+}
+
 // 吹き出しは「しっぽを全部 → 箱を全部」の順に描く（長いコメントの箱が、となりのしっぽに切られないように）
 static void drawBubbles() {
   uint16_t paper = C565(246, 248, 252), ink = C565(24, 30, 50);
-  canvas.setFont(&fonts::lgfxJapanGothic_12);
   int bx[6], bw[6];
   for (int pass = 0; pass < 2; pass++) {
     for (int n = 0; n < 6; n++) {
@@ -535,6 +771,7 @@ static void drawBubbles() {
       const SeatState& s = S[i];
       if (!s.present || s.comment.length() == 0) continue;
       const BubblePos& b = BUB[i];
+      setFontFor(s.comment);
       if (pass == 0) {
         bw[i] = min((int)canvas.textWidth(s.comment) + 12, BW_MAX);
         bx[i] = inCircle(b.cx - bw[i] / 2, bw[i], b.top, BH);
@@ -544,7 +781,7 @@ static void drawBubbles() {
         continue;
       }
       canvas.fillRoundRect(bx[i], b.top, bw[i], BH, 6, paper);
-      if (i == selected) {
+      if (i == focusSeat()) {
         canvas.drawRoundRect(bx[i], b.top, bw[i], BH, 6, accent());
         canvas.drawRoundRect(bx[i] + 1, b.top + 1, bw[i] - 2, BH - 2, 5, accent());
       }
@@ -559,7 +796,7 @@ static void drawBubbles() {
 
 // 名前の札（不在タグ・名札）。円からはみ出さないよう寄せる
 static void drawTag(const String& t, int cx, int y, uint16_t bg, uint16_t fg, bool ring) {
-  canvas.setFont(&fonts::lgfxJapanGothic_12);
+  setFontFor(t);
   int tw = canvas.textWidth(t) + 10;
   int x = inCircle(cx - tw / 2, tw, y, 16);
   canvas.fillRoundRect(x, y, tw, 16, 4, bg);
@@ -569,21 +806,36 @@ static void drawTag(const String& t, int cx, int y, uint16_t bg, uint16_t fg, bo
   canvas.drawString(t, x + tw / 2, y + 8);
 }
 
-// 戻る時刻があれば「田中 16:00戻り」（緑の字）、なければ「田中 不在」
+// 不在（フリーアドレスは離席）の人：戻る時刻があれば「田中 16:00戻り」（緑の字）、なければ「田中 不在」
 static void drawAwayTag(int i) {
   bool back = S[i].back.length() > 0;
-  drawTag(S[i].name + (back ? " " + S[i].back + "戻り" : String(" 不在")), SEATS[i].chairX, SEATS[i].chairY - 8,
-          C565(20, 26, 44), back ? C565(126, 224, 184) : C565(150, 160, 190), i == selected);
+  drawTag(S[i].name + " " + (back ? fmt(L().awayBack, S[i].back) : String(freeMode ? L().awayFree : L().away)), SEATS[i].chairX, SEATS[i].chairY - 8,
+          C565(20, 26, 44), back ? C565(126, 224, 184) : C565(150, 160, 190), i == focusSeat());
 }
 
-static void drawSelection() {
-  // つまみで選んだ直後は、在席の人の頭の上に名札を出す
-  if ((int32_t)(millis() - nameUntil) < 0 && S[selected].present)
-    drawTag(S[selected].name, SEATS[selected].headX, SEATS[selected].headY - 20, accent(), C565(16, 20, 40), false);
+// だれもいない席（名前が空）。この Dial の席なら、椅子の上に「空き」の札（青い枠）
+static bool seatEmpty(int i) { return S[i].name.length() == 0; }
 
-  // 画面下：選んでいる席と、通信の状態
-  String t = String(S[selected].code) + " " + S[selected].name;
-  canvas.setFont(&fonts::lgfxJapanGothic_12);
+static void drawSelection() {
+  int fs = focusSeat();
+  bool naming = (int32_t)(millis() - nameUntil) < 0;
+  // 選んだ・座った直後は、その人の頭の上に名札を出す
+  if (fs >= 0 && naming && S[fs].present)
+    drawTag(S[fs].name, SEATS[fs].headX, SEATS[fs].headY - 20, accent(), C565(16, 20, 40), false);
+  if (fs >= 0 && seatEmpty(fs))
+    drawTag("空き", SEATS[fs].chairX, SEATS[fs].chairY - 8, C565(20, 26, 44), accent(), true);
+
+  // 画面下：この Dial の席と人、通信の状態
+  String t;
+  String seatName = fs >= 0 ? String(S[fs].code) + " " + (seatEmpty(fs) ? String("空き") : S[fs].name) : String("");
+  if (!netEnabled()) t = seatName;
+  else if (role == ROLE_UNKNOWN) t = "つないでいます…";
+  else if (role == ROLE_DESK) t = String(S[fs].code) + " " + (seatEmpty(fs) ? String("カードをかざしてね") : S[fs].name);
+  else if (role == ROLE_PERSONAL) t = String(S[fs].code) + " " + ownerName + " の Dial";
+  else if (freeMode) t = "机が未設定 Dial " + macTail;
+  else if (naming) t = seatName;
+  else t = (role == ROLE_SHARED ? String("全体用") : String("未設定 Dial ") + macTail) + "・カードをかざしてね";
+  setFontFor(t);
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(accent());
   canvas.drawString(t, W / 2 + 5, 224);
@@ -592,8 +844,174 @@ static void drawSelection() {
   canvas.fillCircle(W / 2 + 5 - canvas.textWidth(t) / 2 - 8, 224, 3, c);
 }
 
+// ---------- カード ----------
+// かざした結果を画面の真ん中に出す（座った・帰った・4 桁の番号など）
+static String noteTitle, noteBig, noteSub;
+static uint16_t noteColor = 0;
+static uint32_t noteUntil = 0;
+static String lastUid;
+static uint32_t lastUidAt = 0;
+static bool cardWaiting = false;
+static uint32_t cardSentAt = 0;
+
+static void notice(const String& title, const String& big, const String& sub, uint16_t color, uint32_t ms) {
+  noteTitle = title;
+  noteBig = big;
+  noteSub = sub;
+  noteColor = color;
+  noteUntil = millis() + ms;
+}
+
+static bool noticeShown() { return (int32_t)(millis() - noteUntil) < 0; }
+
+static void drawNotice() {
+  if (!noticeShown()) return;
+  canvas.fillRoundRect(22, 66, 196, 108, 16, C565(14, 18, 34));
+  canvas.drawRoundRect(22, 66, 196, 108, 16, noteColor);
+  canvas.drawRoundRect(23, 67, 194, 106, 15, noteColor);
+  canvas.setTextDatum(middle_center);
+  setFontFor(noteTitle);
+  canvas.setTextColor(C565(170, 180, 205));
+  canvas.drawString(noteTitle, 120, 86);
+  bool digits = noteBig.length() > 0;
+  for (size_t k = 0; k < noteBig.length(); k++) digits = digits && isdigit((unsigned char)noteBig[k]);
+  if (digits) canvas.setFont(&fonts::Font7);  // 4 桁の番号は 7 セグの大きな数字
+  else setFontFor(noteBig, 24);
+  canvas.setTextColor(noteColor);
+  canvas.drawString(noteBig, 120, 122);
+  setFontFor(noteSub);
+  canvas.setTextColor(C565(170, 180, 205));
+  canvas.drawString(noteSub, 120, 157);
+}
+
+static String claimUid;        // 「長押しでこの Dial を自分専用に」を出しているカード（固定席の未設定の Dial）
+static uint32_t claimUntil = 0;
+
+// カードの番号（"04A1B2C3"）をサーバへ送る予約。kind は "card"（かざした）か "claim"（専用にする）
+static void sendCard(const char* kind, const String& uid) {
+  xSemaphoreTake(netLock, portMAX_DELAY);
+  cardJob = String(kind) + "\t" + uid;
+  xSemaphoreGive(netLock);
+  cardWaiting = true;
+  cardSentAt = millis();
+}
+
+static void tapCard(const String& uid) {
+  if (!netEnabled()) { notice("カード " + uid, "お試し中", "Wi-Fi の設定がありません", C565(255, 170, 80), 3000); return; }
+  claimUntil = 0;
+  claimUid = uid;
+  sendCard("card", uid);
+  notice("カードを読みました", "…", "サーバに聞いています", accent(), 8000);
+  M5.Speaker.tone(2000, 40);
+}
+
+// サーバの答えを画面に出す
+static void applyCardReply() {
+  String r;
+  xSemaphoreTake(netLock, portMAX_DELAY);
+  if (cardReplyNew) { r = cardReply; cardReplyNew = false; }
+  xSemaphoreGive(netLock);
+  if (r.length() == 0) {
+    if (cardWaiting && millis() - cardSentAt > 8000) {
+      cardWaiting = false;
+      notice("カード", "とどきません", "サーバにつながっていません", C565(255, 170, 80), 4000);
+    }
+    return;
+  }
+  cardWaiting = false;
+  String f[3];
+  splitTabs(r, f, 3);
+  uint16_t ok = C565(126, 224, 184), warn = C565(255, 170, 80);
+  if (f[0] == "in" || f[0] == "out") {  // 固定席：在席 / 不在。claim なら「長押しで自分専用に」も出す
+    bool claim = f[2] == "claim";
+    bool in = f[0] == "in";
+    notice(f[1] + L().san, in ? L().hello : L().bye, claim ? "長押しでこの Dial を自分専用に" : in ? L().setIn : L().setOut,
+           in ? ok : accent(), claim ? 6000 : 3000);
+    claimUntil = claim ? millis() + 6000 : 0;
+    M5.Speaker.tone(in ? 2600 : 1600, in ? 60 : 80);
+  } else if (f[0] == "deny") {
+    notice("この Dial は", f[1] + " さん専用", "全体用の Dial を使ってね", warn, 3000);
+  } else if (f[0] == "ok") {
+    notice("この Dial を", f[1] + " さん専用", "にしました", ok, 3000);
+    M5.Speaker.tone(2600, 60);
+  } else if (f[0] == "ng") {
+    notice("できませんでした", f[1], "", warn, 3000);
+  } else if (f[0] == "sit") {
+    notice(f[1] + L().san, L().hello, fmt(L().sat, f[2]), ok, 3000);
+    nameUntil = millis() + 4000;
+    M5.Speaker.tone(2600, 60);
+  } else if (f[0] == "back") {
+    notice(f[1] + L().san, L().welcome, L().setIn, ok, 3000);
+    M5.Speaker.tone(2600, 60);
+  } else if (f[0] == "leave") {
+    notice(f[1] + L().san, L().bye, L().freed, accent(), 3000);
+    M5.Speaker.tone(1600, 80);
+  } else if (f[0] == "code") {
+    notice("はじめてのカード", f[1], "/join かマイページの「カード」に入力", C565(255, 214, 120), 60000);
+    M5.Speaker.tone(2200, 40);
+  } else if (f[0] == "nodesk") {
+    notice(f[1] + " さん", "机が未設定", "/admin で Dial " + macTail + " の机を決めて", warn, 5000);
+  } else {
+    notice("カード", "とどきません", "サーバにつながっていません", warn, 4000);
+  }
+}
+
+// カードを読む（画面側で少しずつ）。同じカードをかざしっぱなしなら 3 秒は読み直さない
+static uint32_t nextCardPoll = 0;
+static bool rfidOk = false;
+static void pollCard() {
+  if (!rfidOk || (int32_t)(millis() - nextCardPoll) < 0) return;
+  nextCardPoll = millis() + 150;
+  auto& r = M5Dial.Rfid;
+  if (!r.PICC_IsNewCardPresent() || !r.PICC_ReadCardSerial()) return;
+  String uid;
+  for (byte i = 0; i < r.uid.size; i++) {
+    char b[3];
+    snprintf(b, sizeof b, "%02X", r.uid.uidByte[i]);
+    uid += b;
+  }
+  r.PICC_HaltA();
+  // 4 バイトで先頭が 08 の番号は、かざすたびに変わる（スマホや一部の社員証）。登録に使えない
+  if (r.uid.size == 4 && r.uid.uidByte[0] == 0x08) {
+    notice("このカードは使えません", "×", "かざすたびに番号が変わるカード", C565(255, 157, 176), 4000);
+    return;
+  }
+  if (uid == lastUid && millis() - lastUidAt < 3000) { lastUidAt = millis(); return; }
+  lastUid = uid;
+  lastUidAt = millis();
+  Serial.printf("[card] %s\n", uid.c_str());
+  tapCard(uid);
+}
+
+// 個人用の Dial で持ち主が不在のあいだ、背景がゆっくり明るくなったり戻ったりする（「いるのに不在のまま」に気づける程度に）
+static const uint32_t AWAY_PULSE_MS = 2400;             // 明るくなって戻るまでの時間
+static const int AWAY_R = 20, AWAY_G = 44, AWAY_B = 31;  // 寄せる色（RGB565 の各成分。R・B は 0〜31、G は 0〜63。淡い水色）
+static const int AWAY_MIX = 64;                         // いちばん明るいときにどれだけ寄せるか（0〜256）
+
+// 今どれだけ寄せるか（0〜AWAY_MIX）。個人用で持ち主が不在のときだけ
+static int awayMix() {
+  if (role != ROLE_PERSONAL || roleSeat < 0 || S[roleSeat].present || seatEmpty(roleSeat)) return 0;
+  uint32_t t = millis() % AWAY_PULSE_MS, half = AWAY_PULSE_MS / 2;
+  uint32_t u = t < half ? t : AWAY_PULSE_MS - t;  // 0 → half → 0
+  return AWAY_MIX * u / half;
+}
+
+// フレームバッファ（上位・下位バイトが入れ替わった RGB565）の背景を、AWAY_* の色へ mix だけ寄せる
+static void tintBackground(int mix) {
+  for (int k = 0; k < W * H; k++) {
+    uint16_t v = __builtin_bswap16(fb[k]);
+    int r = v >> 11, g = (v >> 5) & 63, b = v & 31;
+    r += (AWAY_R - r) * mix >> 8;
+    g += (AWAY_G - g) * mix >> 8;
+    b += (AWAY_B - b) * mix >> 8;
+    fb[k] = __builtin_bswap16((uint16_t)((r << 11) | (g << 5) | b));
+  }
+}
+
 static void render() {
   memcpy(fb, BG_RAW, W * H * 2);
+  int mix = awayMix();
+  if (mix > 0) tintBackground(mix);
   uint32_t now = millis();
   for (int n = 0; n < 6; n++) {
     int i = DRAW_ORDER[n];
@@ -606,23 +1024,11 @@ static void render() {
     else blit(SEATS[i].x, SEATS[i].y, SEATS[i].h, closed ? SEATS[i].blink[f] : SEATS[i].open[f]);
     if (s.blinkLeft > 0) s.blinkLeft--;
   }
-  for (int i = 0; i < 6; i++) if (!S[i].present) drawAwayTag(i);
+  for (int i = 0; i < 6; i++) if (!S[i].present && !seatEmpty(i)) drawAwayTag(i);
   drawBubbles();
   drawSelection();
+  drawNotice();
   canvas.pushSprite(0, 0);
-}
-
-// タップ位置に一番近い席
-static int seatAt(int tx, int ty) {
-  int best = -1, bestD = 1 << 30;
-  for (int i = 0; i < 6; i++) {
-    const SeatArt& a = SEATS[i];
-    int cx = a.x + a.w / 2, cy = a.y + a.h / 2;
-    bool inside = tx >= a.x - 5 && tx < a.x + a.w + 5 && ty >= a.y - 5 && ty < a.y + a.h + 5;
-    int d = (tx - cx) * (tx - cx) + (ty - cy) * (ty - cy);
-    if (inside && d < bestD) { bestD = d; best = i; }
-  }
-  return best;
 }
 
 static void handleSerial() {
@@ -631,6 +1037,12 @@ static void handleSerial() {
   line.trim();
   if (line.length() < 3) return;
   char cmd = line[0];
+  if (cmd == 'l') {
+    langForced = langIndex(line.substring(2));
+    Serial.printf("lang=%s\n", L().code);
+    return;
+  }
+  if (cmd == 'k') { String uid = line.substring(2); uid.trim(); uid.toUpperCase(); tapCard(uid); return; }
   int i = line.substring(2, 3).toInt();
   if (i < 0 || i > 5) return;
   if (cmd == 'p') { S[i].present = !S[i].present; sendPresent(i); }
@@ -677,32 +1089,30 @@ static int encSteps() {
 //   文       : 黒い画面に縦の一覧。選んでいる文はオレンジのバー（MORE メニュー風）
 // 決める : つまみを押す / 画面の真ん中をタップ
 // もどる : つまみを長押し / 画面のどこでも長押し / 下の「<」をタップ
-enum Mode { M_OFFICE, M_GENRE, M_VALUE, M_LIST };
+enum Mode { M_OFFICE, M_GENRE, M_VALUE, M_LIST, M_TIMER };
 enum Kind { K_UNTIL, K_AFTER, K_BACK, K_LIST, K_CLEAR };
 struct Genre {
-  const char* name;
   uint32_t color;
   uint8_t kind;
   int16_t step, lo, hi, def;  // 時間のジャンル：つまみ1カチッの分、いちばん短い・長い、はじめの値（分）
-  const char* const* items;   // 文のジャンル：一覧（nullptr ならオリジナル）
+  int8_t list;                // 文のジャンル：0 気温 / 1 予定 / 2 声かけ / 3 オリジナル（文は LangText にある）
   uint8_t nItems;
   const char* duration;       // 文のジャンル：消えるまで（サーバの "2h" / "today"）
+  const char* timer;          // 時間のジャンル：サーバに送る種類（タイマー画面で残り時間を出す）
 };
-static const char* const TEMP_ITEMS[] = {"寒い", "ちょっと寒い", "ちょっと暑い", "暑い"};
-static const char* const PLAN_ITEMS[] = {"午後から会議", "定時で帰ります", "明日はお休み"};
-static const char* const TALK_ITEMS[] = {"話しかけOK", "手が空いてます", "雑談したい", "あとで返事します"};
+// ジャンルの名前は LangText の genre（この順）
 static const int GN = 10;
 static const Genre GEN[GN] = {
-  {"集中", 0xFD5C4C, K_UNTIL, 15, 15, 240, 60},
-  {"休憩", 0xEB8429, K_UNTIL, 5, 5, 60, 10},
-  {"会議", 0x577EFF, K_UNTIL, 15, 15, 180, 60},
-  {"外出", 0x03A964, K_AFTER, 5, 5, 120, 10},
-  {"戻り", 0x0B8F6A, K_BACK, 15, 15, 720, 60},
-  {"気温", 0x008CD6, K_LIST, 0, 0, 0, 0, TEMP_ITEMS, 4, "2h"},
-  {"予定", 0x5D7BA2, K_LIST, 0, 0, 0, 0, PLAN_ITEMS, 3, "today"},
-  {"声かけ", 0x1AA198, K_LIST, 0, 0, 0, 0, TALK_ITEMS, 4, "2h"},
-  {"オリジナル", 0xD9A21B, K_LIST, 0, 0, 0, 0, nullptr, 0, "2h"},
-  {"消す", 0x6B6F7A, K_CLEAR},
+  {0xFD5C4C, K_UNTIL, 15, 15, 240, 60, -1, 0, nullptr, "focus"},
+  {0xEB8429, K_UNTIL, 5, 5, 60, 10, -1, 0, nullptr, "rest"},
+  {0x577EFF, K_UNTIL, 15, 15, 180, 60, -1, 0, nullptr, "meeting"},
+  {0x03A964, K_AFTER, 5, 5, 120, 10, -1, 0, nullptr, "out"},
+  {0x0B8F6A, K_BACK, 15, 15, 720, 60, -1},
+  {0x008CD6, K_LIST, 0, 0, 0, 0, 0, 4, "2h"},
+  {0x5D7BA2, K_LIST, 0, 0, 0, 0, 1, 3, "today"},
+  {0x1AA198, K_LIST, 0, 0, 0, 0, 2, 4, "2h"},
+  {0xD9A21B, K_LIST, 0, 0, 0, 0, 3, 0, "2h"},
+  {0x6B6F7A, K_CLEAR, 0, 0, 0, 0, -1},
 };
 
 static Mode mode = M_OFFICE;
@@ -716,6 +1126,16 @@ static uint32_t menuIdle = 0;
 static const uint32_t MENU_IDLE_MS = 20000;  // さわらなければ島の画面に戻る
 static const uint32_t MENU_TICK_MS = 30;
 
+static String gName(int i) { return L().genre[i]; }
+static const char* const* gItems(int i) {
+  switch (GEN[i].list) {
+    case 0: return L().temp;
+    case 1: return L().plan;
+    case 2: return L().talk;
+  }
+  return nullptr;  // オリジナル
+}
+
 static uint16_t hex565(uint32_t c) { return C565(c >> 16, (c >> 8) & 255, c & 255); }
 static uint16_t white() { return C565(255, 255, 255); }
 static uint16_t cream() { return C565(243, 233, 210); }
@@ -725,6 +1145,18 @@ static int nowMin() {
   if (srvSec < 0) return (12 * 60 + millis() / 60000) % 1440;
   return (int)((srvSec + (millis() - srvAt) / 1000) / 60) % 1440;
 }
+// サーバの時計で、その日の 0 時からの秒
+static int32_t nowSec() {
+  if (srvSec < 0) return (12 * 3600 + millis() / 1000) % 86400;
+  return (int32_t)((srvSec + (millis() - srvAt) / 1000) % 86400);
+}
+
+static int8_t timerGen(const String& kind) {
+  for (int g = 0; g < GN; g++)
+    if (GEN[g].timer && kind == GEN[g].timer) return g + 1;
+  return 0;
+}
+
 static String hhmm(int m) {
   m = ((m % 1440) + 1440) % 1440;
   char b[8];
@@ -855,15 +1287,17 @@ static void renderGenre() {
   canvas.fillSmoothCircle(120 + 58 * cosf(a), 120 + 58 * sinf(a), 5, cream());
 
   // 名前は白い点のほうへ少し寄せる（デモと同じ）。長い名前は点に重ならないよう真ん中に置き、字も少し小さく
-  bool longName = strlen(GEN[gSel].name) > 9;
+  String name = gName(gSel);
+  bool longName = name.length() > 9;
   int tx = longName ? 120 : 120 + 8 * cosf(a), ty = longName ? 120 : 120 + 8 * sinf(a);
   canvas.setTextDatum(middle_center);
-  canvas.setFont(longName ? &fonts::lgfxJapanGothic_20 : &fonts::lgfxJapanGothic_24);
+  setFontFor(name, longName ? 20 : 24);
   canvas.setTextColor(cream());
-  canvas.drawString(GEN[gSel].name, tx, ty - 6);
-  canvas.setFont(&fonts::lgfxJapanGothic_12);
+  canvas.drawString(name, tx, ty - 6);
+  String seat = String(S[hSeat].code) + " " + S[hSeat].name;
+  setFontFor(seat);
   canvas.setTextColor(C565(130, 136, 150));
-  canvas.drawString(String(S[hSeat].code) + " " + S[hSeat].name, tx, ty + 18);
+  canvas.drawString(seat, tx, ty + 18);
 }
 
 static void drawBack(uint16_t c) {
@@ -877,9 +1311,9 @@ static void drawBack(uint16_t c) {
 static void valueText(String& num, String& unit, String& label) {
   const Genre& g = GEN[gSel];
   int now = nowMin();
-  if (g.kind == K_UNTIL) { num = String(vVal); unit = "分"; label = "〜" + hhmm(now + vVal) + " まで"; }
-  if (g.kind == K_AFTER) { num = String(vVal); unit = "分後"; label = hhmm(now + vVal) + " に外出"; }
-  if (g.kind == K_BACK) { num = hhmm(vVal); unit = ""; label = "に戻ります"; }
+  if (g.kind == K_UNTIL) { num = String(vVal); unit = L().unitUntil; label = fmt(L().labelUntil, hhmm(now + vVal)); }
+  if (g.kind == K_AFTER) { num = String(vVal); unit = L().unitAfter; label = fmt(L().labelAfter, hhmm(now + vVal)); }
+  if (g.kind == K_BACK) { num = hhmm(vVal); unit = ""; label = L().labelBack; }
 }
 
 static void renderValue() {
@@ -893,7 +1327,7 @@ static void renderValue() {
   valueText(num, unit, label);
   canvas.setFont(&fonts::FreeSansBold24pt7b);
   int w1 = canvas.textWidth(num);
-  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  setFontFor(unit, 20);
   int w2 = unit.length() ? canvas.textWidth(unit) + 3 : 0;
   int x0 = 120 - (w1 + w2) / 2;
   canvas.setTextColor(c);
@@ -901,11 +1335,11 @@ static void renderValue() {
   canvas.setFont(&fonts::FreeSansBold24pt7b);
   canvas.drawString(num, x0, 118);
   if (w2) {
-    canvas.setFont(&fonts::lgfxJapanGothic_20);
+    setFontFor(unit, 20);
     canvas.drawString(unit, x0 + w1 + 3, 116);
   }
   canvas.setTextDatum(middle_center);
-  canvas.setFont(&fonts::lgfxJapanGothic_16);
+  setFontFor(label, 16);
   canvas.drawString(label, 120, 158);
   // 指でも増やせるように、箱の左右に − と ＋
   canvas.setFont(&fonts::lgfxJapanGothic_24);
@@ -915,23 +1349,24 @@ static void renderValue() {
   drawBack(white());
 }
 
-static int listCount() { return GEN[gSel].items ? GEN[gSel].nItems : origN[hSeat]; }
-static String listItem(int i) { return GEN[gSel].items ? String(GEN[gSel].items[i]) : orig[hSeat][i]; }
+static int listCount() { return gItems(gSel) ? GEN[gSel].nItems : origN[hSeat]; }
+static String listItem(int i) { return gItems(gSel) ? String(gItems(gSel)[i]) : orig[hSeat][i]; }
 
 static void renderList() {
   const Genre& g = GEN[gSel];
   canvas.fillScreen(TFT_BLACK);
   canvas.setTextDatum(middle_center);
-  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  String title = gName(gSel);
+  setFontFor(title, 20);
   canvas.setTextColor(hex565(g.color));
-  canvas.drawString(g.name, 120, 30);
+  canvas.drawString(title, 120, 30);
 
   int n = listCount();
   if (n == 0) {
-    canvas.setFont(&fonts::lgfxJapanGothic_16);
+    setFontFor(String(L().noOrig[0]) + L().noOrig[1], 16);
     canvas.setTextColor(C565(150, 156, 170));
-    canvas.drawString("マイページの", 120, 108);
-    canvas.drawString("「オリジナル」で足せます", 120, 132);
+    canvas.drawString(L().noOrig[0], 120, 108);
+    canvas.drawString(L().noOrig[1], 120, 132);
     drawBack(C565(140, 140, 140));
     return;
   }
@@ -940,7 +1375,7 @@ static void renderList() {
 
   // 選んでいる文のバー（真ん中に固定。文がそこへ流れてくる）
   String cur = listItem(lSel);
-  canvas.setFont(cur.length() > 27 ? &fonts::lgfxJapanGothic_16 : &fonts::lgfxJapanGothic_20);
+  setFontFor(cur, cur.length() > 27 ? 16 : 20);
   int bw = min(196, (int)canvas.textWidth(cur) + 16);
   canvas.fillSmoothRoundRect(26, 106, bw, 28, 5, C565(250, 112, 0));
 
@@ -952,7 +1387,7 @@ static void renderList() {
     String t = listItem(i);
     float off = 120 - 120 * cosf(dy / 120);  // 丸い画面のふちに沿って右へずらす
     int v = max(50, 255 - (int)fabsf(dy) * 2);
-    canvas.setFont(t.length() > 27 ? &fonts::lgfxJapanGothic_16 : &fonts::lgfxJapanGothic_20);
+    setFontFor(t, t.length() > 27 ? 16 : 20);
     canvas.setTextColor(fabsf(dy) < 14 ? C565(5, 143, 255) : C565(v, v, v));  // バーの上は反転した色
     canvas.drawString(t, 34 + (int)off, 120 + (int)dy);
   }
@@ -960,8 +1395,109 @@ static void renderList() {
   drawBack(C565(140, 140, 140));
 }
 
+// ---- タイマー画面（オフィスの画面を左右にスワイプ）----
+// 時間のひとこと（集中・休憩・会議・外出）の残り時間と、不在のときの「戻り」までの時間を大きく出す
+static void roleHint();  // 下（操作のところ）
+static int tSeat = 0;
+static int8_t tShowGen = 0;      // 出している種類（GEN の番号 + 1。戻りは K_BACK のジャンル）
+static uint32_t tShowEnd = 0, tShowTotal = 1;
+static uint32_t tDoneAt = 0;      // 0 になった時刻（鳴らすのは 1 回だけ。少し見せたら島に戻る）
+static int beepLeft = 0;
+static uint32_t nextBeep = 0;
+
+static int genOf(uint8_t kind) {
+  for (int g = 0; g < GN; g++) if (GEN[g].kind == kind) return g;
+  return 0;
+}
+
+// その席で見せられるタイマーを選ぶ。無ければ false
+static bool pickTimer(int i) {
+  SeatState& s = S[i];
+  uint32_t now = millis();
+  if (s.tGen > 0 && (int32_t)(s.tEnd - now) > 0) {
+    tShowGen = s.tGen;
+    tShowEnd = s.tEnd;
+    tShowTotal = max<uint32_t>(s.tTotal, 1);
+    return true;
+  }
+  if (!s.present && s.back.length() >= 4) {  // 戻り 16:00
+    int h = s.back.toInt(), m = s.back.substring(s.back.indexOf(':') + 1).toInt();
+    int32_t left = (h * 60 + m) * 60 - nowSec();
+    if (left <= 0 || left > 12 * 3600) return false;
+    tShowGen = genOf(K_BACK) + 1;
+    tShowEnd = now + (uint32_t)left * 1000;
+    tShowTotal = left;
+    return true;
+  }
+  return false;
+}
+
+static void openTimer(int i) {
+  if (i < 0) { roleHint(); return; }
+  if (seatEmpty(i) || !pickTimer(i)) {
+    String who = seatEmpty(i) ? String("机 ") + S[i].code : S[i].name + L().san;
+    notice(who, L().tNone[0], L().tNone[1], accent(), 2500);
+    return;
+  }
+  tSeat = i;
+  tDoneAt = 0;
+  beepLeft = 0;
+  mode = M_TIMER;
+}
+
+static void renderTimer() {
+  const Genre& g = GEN[tShowGen - 1];
+  uint16_t c = hex565(g.color);
+  uint32_t now = millis();
+  int32_t leftMs = (int32_t)(tShowEnd - now);
+  int32_t left = leftMs > 0 ? (leftMs + 999) / 1000 : 0;
+  if (left == 0 && !tDoneAt) { tDoneAt = now ? now : 1; beepLeft = 3; nextBeep = now; }
+  if (beepLeft > 0 && (int32_t)(now - nextBeep) >= 0) { M5.Speaker.tone(2600, 120); beepLeft--; nextBeep = now + 250; }
+
+  canvas.fillScreen(c);
+  // 外の輪：残りの割合（12 時から時計回りに減る）
+  uint16_t track = C565(((c >> 11) & 31) * 8 * 3 / 5, ((c >> 5) & 63) * 4 * 3 / 5, (c & 31) * 8 * 3 / 5);
+  canvas.fillArc(120, 120, 119, 109, 0, 360, track);
+  float frac = min(1.0f, (float)leftMs / (tShowTotal * 1000.0f));
+  if (frac > 0) canvas.fillArc(120, 120, 119, 109, -90, -90 + 360 * frac, white());
+
+  drawIcon(tShowGen - 1, 120, 44, 1.0f, white(), c);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(white());
+  String title = g.kind == K_AFTER ? String(L().tOut) : g.kind == K_BACK ? String(L().tBack) : fmt(L().tLeft, gName(tShowGen - 1));
+  setFontFor(title, 16);
+  canvas.drawString(title, 120, 76);
+
+  if (left == 0) {
+    String done = g.kind == K_AFTER ? L().tDoneOut : L().tDone;
+    setFontFor(done, 24);
+    canvas.setTextSize(done.length() > 15 ? 1.2f : 1.6f);
+    canvas.drawString(done, 120, 120);
+    canvas.setTextSize(1);
+  } else {
+    char b[12];
+    if (left >= 3600) snprintf(b, sizeof(b), "%ld:%02ld:%02ld", (long)(left / 3600), (long)(left / 60 % 60), (long)(left % 60));
+    else snprintf(b, sizeof(b), "%ld:%02ld", (long)(left / 60), (long)(left % 60));
+    canvas.setFont(&fonts::FreeSansBold24pt7b);
+    canvas.setTextSize(left >= 3600 ? 1.1f : 1.5f);
+    canvas.drawString(b, 120, 122);
+    canvas.setTextSize(1);
+  }
+
+  // 終わる時刻と、だれのタイマーか（自分の Dial でなければ）
+  int endMin = (int)((nowSec() + max<int32_t>(leftMs, 0) / 1000 + 30) / 60);
+  canvas.setFont(&fonts::lgfxJapanGothic_20);
+  canvas.drawString(String("〜") + hhmm(endMin), 120, 164);
+  if (!ownSeatRole()) {
+    String who = S[tSeat].name + L().san;
+    setFontFor(who, 16);
+    canvas.drawString(who, 120, 190);
+  }
+}
+
 static void renderMenu() {
-  if (mode == M_GENRE) renderGenre();
+  if (mode == M_TIMER) renderTimer();
+  else if (mode == M_GENRE) renderGenre();
   else if (mode == M_VALUE) renderValue();
   else renderList();
   canvas.pushSprite(0, 0);
@@ -970,7 +1506,7 @@ static void renderMenu() {
 // ---- 操作 ----
 static void openMenu(int seat) {
   hSeat = seat;
-  selected = seat;
+  if (canSelect()) selected = seat;
   mode = M_GENRE;
   gAng = -90 + gSel * 36;
   gVel = 0;
@@ -979,7 +1515,46 @@ static void openMenu(int seat) {
 
 static void closeMenu() {
   mode = M_OFFICE;
-  nameUntil = millis() + 1500;
+  if (canSelect()) nameUntil = millis() + 1500;
+}
+
+// タップ位置に一番近い席
+static int seatAt(int tx, int ty) {
+  int best = -1, bestD = 1 << 30;
+  for (int i = 0; i < 6; i++) {
+    const SeatArt& a = SEATS[i];
+    int cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+    bool inside = tx >= a.x - 5 && tx < a.x + a.w + 5 && ty >= a.y - 5 && ty < a.y + a.h + 5;
+    int d = (tx - cx) * (tx - cx) + (ty - cy) * (ty - cy);
+    if (inside && d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// この Dial の席でできないことをしたときの案内
+static void roleHint() {
+  uint16_t warn = C565(255, 170, 80);
+  if (freeMode && role != ROLE_DESK) notice("この Dial", "机が未設定", "/admin で Dial " + macTail + " の机を決めて", warn, 4000);
+  else if (role == ROLE_UNKNOWN) notice("この Dial", "つないでいます", "サーバと同期するまで待ってね", accent(), 2500);
+  else notice("在席の切り替えは", "カードで", "カードをかざしてね", accent(), 2500);
+}
+
+// この Dial の席の人のひとこと選びを開く（個人用・机）
+static void openOwnMenu() {
+  int i = focusSeat();
+  if (!ownSeatRole() || i < 0) { roleHint(); return; }
+  if (seatEmpty(i)) { notice(String("机 ") + S[i].code, "空き", "カードをかざすと座れます", accent(), 3000); return; }
+  openMenu(i);
+}
+
+// この Dial の席の 在席 / 不在（離席）。個人用・机だけ
+static void toggleOwnPresent() {
+  int i = focusSeat();
+  if (!ownSeatRole() || i < 0 || seatEmpty(i)) { if (i >= 0 && seatEmpty(i)) openOwnMenu(); else roleHint(); return; }
+  S[i].present = !S[i].present;
+  sendPresent(i);
+  const char* off = freeMode ? L().awayFree : L().away;
+  notice(S[i].name + L().san, S[i].present ? L().present : off, S[i].present ? L().welcome : freeMode ? L().keepSeat : L().seeYou, accent(), 2000);
 }
 
 // 押したアイコンの色の丸を、画面いっぱいまで広げる（デモのアプリを開くときと同じ）
@@ -997,6 +1572,7 @@ static void enterGenre() {
   const Genre& g = GEN[gSel];
   if (g.kind == K_CLEAR) {
     S[hSeat].comment = "";
+    S[hSeat].tGen = 0;
     sendComment(hSeat);
     closeMenu();
     return;
@@ -1031,8 +1607,18 @@ static void decide() {
   if (mode == M_GENRE) { enterGenre(); return; }
   if (mode == M_VALUE) {
     String t = hhmm(g.kind == K_BACK ? vVal : nowMin() + vVal);
-    if (g.kind == K_UNTIL) { s.comment = String(g.name) + " 〜" + t; sendText(hSeat, s.comment, "\"until\":\"" + t + "\""); }
-    if (g.kind == K_AFTER) { s.comment = t + " 外出"; sendText(hSeat, s.comment, "\"until\":\"" + t + "\""); }
+    String extra = "\"until\":\"" + t + "\",\"timer\":\"" + (g.timer ? g.timer : "") + "\"";
+    if (g.kind == K_UNTIL) s.comment = fmt(L().cmtUntil, gName(gSel), t);
+    if (g.kind == K_AFTER) s.comment = fmt(L().cmtAfter, t);
+    if (g.kind == K_UNTIL || g.kind == K_AFTER) {
+      sendText(hSeat, s.comment, extra);
+      // サーバと同じく、その時刻（分の頭）までの秒
+      int32_t left = ((nowMin() + vVal) % 1440) * 60 - nowSec();
+      if (left <= 0) left += 86400;
+      s.tGen = gSel + 1;
+      s.tEnd = millis() + (uint32_t)left * 1000;
+      s.tTotal = left;
+    }
     if (g.kind == K_BACK) {
       s.present = false;
       s.back = t;
@@ -1043,6 +1629,7 @@ static void decide() {
   }
   if (listCount() == 0) return;
   s.comment = listItem(lSel);
+  s.tGen = 0;
   sendText(hSeat, s.comment, String("\"duration\":\"") + g.duration + "\"");
   closeMenu();
 }
@@ -1081,7 +1668,7 @@ static void tapMenu(int tx, int ty) {
 static void handleInput() {
   int d = encSteps();
   bool click = M5.BtnA.wasClicked(), hold = M5.BtnA.wasHold();
-  bool tap = false, press = false;
+  bool tap = false, press = false, swipe = false;
   int tx = 0, ty = 0;
   if (M5.Touch.getCount() > 0) {
     auto t = M5.Touch.getDetail();
@@ -1089,27 +1676,56 @@ static void handleInput() {
     ty = t.y;
     tap = t.wasClicked();
     press = t.wasHold();
+    int dx = t.distanceX(), dy = t.distanceY();
+    swipe = t.wasFlicked() && abs(dx) > 40 && abs(dx) > abs(dy);  // 左右にさっと払う
+  }
+
+  if (mode == M_TIMER) {  // どの操作でも島に戻る。0 になったら少し見せて戻る
+    if (click || hold || tap || press || swipe) mode = M_OFFICE;
+    else if (tDoneAt && millis() - tDoneAt > 10000) mode = M_OFFICE;
+    else if (noticeShown()) mode = M_OFFICE;  // カードをかざしたときの知らせを見せる
+    return;
   }
   if (mode != M_OFFICE && (d || click || hold || tap || press)) menuIdle = millis();
 
   if (mode == M_OFFICE) {
-    if (d) {
+    // つまみを回す：席を選んで名札を見る（固定席の全体用・未設定、お試し）
+    if (d && canSelect()) {
       int k = 0;
       while (DIAL_ORDER[k] != selected) k++;
       k = ((k + d) % 6 + 6) % 6;
       selected = DIAL_ORDER[k];
       nameUntil = millis() + 1500;
     }
-    if (hold) { S[selected].present = !S[selected].present; sendPresent(selected); }
-    else if (click) openMenu(selected);
-    if (tap) {  // 席をタップ → 在席 / 不在
-      int i = seatAt(tx, ty);
-      if (i >= 0) { S[i].present = !S[i].present; selected = i; sendPresent(i); }
+    // カードの直後の「長押しでこの Dial を自分専用に」
+    if (hold && (int32_t)(millis() - claimUntil) < 0) {
+      claimUntil = 0;
+      sendCard("claim", claimUid);
+      notice("この Dial を", "専用にしています…", "", accent(), 8000);
+      return;
     }
-    if (press) {  // 席を長押し → その席のひとこと
-      int i = seatAt(tx, ty);
-      if (i >= 0) openMenu(i);
+    if ((click || tap) && noticeShown()) { noteUntil = 0; claimUntil = 0; return; }  // 出ている知らせを閉じる
+    if (swipe) { noteUntil = 0; openTimer(focusSeat()); return; }  // 時間のひとことの残り時間
+
+    if (!netEnabled()) {  // お試し：今までどおり全部の席を動かせる
+      if (hold) { S[selected].present = !S[selected].present; sendPresent(selected); }
+      else if (click) openMenu(selected);
+      int i = (tap || press) ? seatAt(tx, ty) : -1;
+      if (tap && i >= 0) { S[i].present = !S[i].present; selected = i; sendPresent(i); }
+      if (press && i >= 0) openMenu(i);
+      return;
     }
+    if (ownSeatRole()) {  // 個人用・机：いつもこの Dial の席の人
+      if (hold) toggleOwnPresent();
+      else if (click || tap || press) openOwnMenu();
+      return;
+    }
+    if (canSelect() && (tap || press)) {  // 全体用・未設定：タップで席を選んで名前を見る
+      int i = seatAt(tx, ty);
+      if (i >= 0) { selected = i; nameUntil = millis() + 1500; }
+      return;
+    }
+    if (hold || click || tap || press) roleHint();
     return;
   }
 
@@ -1144,6 +1760,10 @@ void setup() {
   fb = (uint16_t*)canvas.getBuffer();
   loadSlots();
   encBegin();
+  // カードの読み取り部品（内部の I2C、アドレス 0x28）。見つからなくても島の表示は続ける
+  rfidOk = M5.In_I2C.scanID(0x28);
+  if (rfidOk) M5Dial.Rfid.begin();
+  Serial.printf("[card] 読み取り部品 %s\n", rfidOk ? "OK" : "見つからない");
 
   uint32_t now = millis();
   for (int i = 0; i < 6; i++) S[i].nextBlink = now + 1000 + random(4000);
@@ -1162,6 +1782,8 @@ void loop() {
   handleSerial();
   applyInbox();
   applyArt();
+  applyCardReply();
+  if (mode == M_OFFICE || mode == M_TIMER) pollCard();
   handleInput();
 
   uint32_t now = millis();

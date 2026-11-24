@@ -63,6 +63,8 @@
     <nav>
       <span class="conn" id="conn">接続中…</span>
       <a href="/me">マイページ</a>
+      <a href="/join">登録</a>
+      <a href="/admin">管理</a>
     </nav>
   </header>
 
@@ -204,9 +206,17 @@ function disposeTree(o) {
 
 // ---- サーバの状態を席に反映 ----
 function applyState(s) {
-  for (const m of s.members) {
-    const seat = seats[m.seat];
-    if (!seat) continue;
+  for (const seat of Object.values(seats)) {
+    const m = s.members.find((x) => x.seat === seat.code);
+    // だれも座っていない席（フリーアドレス）：キャラも札も出さない
+    if (!m) {
+      if (seat.chara) { seat.group.remove(seat.chara.root); disposeTree(seat.chara.root); }
+      seat.chara = null; seat.charaId = null;
+      seat.screenMat.color.copy(screenOff);
+      seat.pin.replaceChildren();
+      seat.anchor = null;
+      continue;
+    }
     // キャラ未設定の人は、席ごとに決まった完成キャラで仮に表示する
     const want = !m.present || !CHARA_IDS.length ? null
       : (m.character && charas[m.character.id] ? m.character.id : CHARA_IDS[seat.idx % CHARA_IDS.length]);
@@ -236,13 +246,14 @@ function applyState(s) {
     } else {
       const t = document.createElement("div");
       t.className = "away";
-      t.textContent = m.back ? `${m.name} 不在・${m.back} 戻り` : `${m.name} 不在`;
+      const away = s.mode === "free" ? "離席" : "不在";
+      t.textContent = m.back ? `${m.name} ${away}・${m.back} 戻り` : `${m.name} ${away}`;
       seat.pin.replaceChildren(t);
       seat.anchor = seat.chair;
     }
   }
   $("count").textContent = `${s.members.filter((m) => m.present).length}/${s.members.length}`;
-  $("reset").textContent = `毎晩 ${s.resetAt} に全員を不在に戻します`;
+  $("reset").textContent = s.mode === "free" ? `毎晩 ${s.resetAt} に全員の席を空けます` : `毎晩 ${s.resetAt} に全員を不在に戻します`;
 }
 
 // ---- ポーズ（characters/<作成者>/<id>.html の座りポーズ。作業中とひと休みを席ごとに） ----

@@ -1,21 +1,38 @@
 // 電脳オフィス サーバ（マイページ + オフィス表示）
 //
-// 在席・ひとりごと・キャラ設定を1か所で持ち、ブラウザ（今後は StopWatch も）に同じデータを配る。
-// 依存パッケージなし（Node.js 18 以上）。状態は data/state.json に保存する。
+// 在席・ひとりごと・キャラ設定を1か所で持ち、ブラウザ・StopWatch・Dial に同じデータを配る。
+// 依存パッケージなし（Node.js 18 以上）。状態は data/state.json、名簿・カード・Dial は data/registry.json（registry.js）に保存する。
 //
-//   node server.js            → http://<この Mac の IP>:8080/
+//   node server.js                  → http://<この Mac の IP>:8080/（固定席）
+//   SEAT_MODE=free node server.js   → フリーアドレス
 //   PORT=3000 RESET_AT=21:30 node server.js
+//
+// 席の決め方（SEAT_MODE）
+//   fixed（既定）固定席：席は名簿で一人ずつ決まっている。カードをかざすと在席 / 不在。Dial は「全体用」か「〇〇さん専用」
+//   free         フリーアドレス：その日に座る席を、机の Dial にカード・席の NFC タグにスマホ・マイページの席の図で決める。
+//                Dial は「机」。毎晩のリセットで全員の席が空く。名簿の席は「いつもの席」（席を選ばずに在席にするとそこに座る）
 //
 // 画面
 //   /          オフィス（島6席の様子を Three.js で。キャラは /charas.js）
 //   /me        マイページ（自分を選ぶ）
-//   /me/<id>   マイページ（在席・ひとりごと・キャラ。パーツでキャラを作る画面もここ）
+//   /me/<id>   マイページ（在席・ひとりごと・キャラ・カード。フリーアドレスでは席の図も。パーツでキャラを作る画面もここ）
+//   /join      はじめての人の登録（名前・席・カード）
+//   /admin     管理（Dial の役割、メンバーの名前・席・カード）
+//   /tap/<席>  NFC タグ用（フリーアドレス）。スマホでタッチすると、その席に座る / 席を離れる。/tap はタグに書く URL の一覧
 // API
 //   GET   /api/state            全員の状態
 //   GET   /api/characters       キャラ一覧（characters/<作成者>/characters.json から）
-//   PATCH /api/members/<id>     { present?, comment?: {text, duration} | null, character?: "maple/c01" | null }
+//   PATCH /api/members/<id>     { seat?: "A1" | null（フリーアドレス）, present?, comment?: {text, duration か until・timer} | null, back?, originals?, lang?: "ja" | "en" | "zh", character?: "maple/c01" | null }
+//   POST  /api/members/<id>/tap { seat: "A1" }  席に座る / 戻る / 帰る（フリーアドレス。NFC タグ）→ { action: "sit" | "back" | "leave", state }
+//   POST  /api/members/<id>/card { code, claimDial? }  Dial に出た番号で、カードをその人のものにする / DELETE で外す
+//   GET   /api/codes/<番号>     Dial に出た 4 桁の番号の確認 → { canClaim, dialRole, usedBy }
+//   POST  /api/register         { name, seat?, code?, claimDial? }  登録 → { id }
+//   PATCH /api/admin/members/<id> { name?, seat?, card?: null } / DELETE で名簿から消す
+//   GET   /api/dials            Dial の一覧 / PATCH /api/dials/<mac> { role?, owner?, seat?, label? } / DELETE で一覧から消す
+//   POST  /api/card             { mac, uid }  Dial にカードがかざされた（返事はタブ区切り 1 行。tapCard を見る）
+//   POST  /api/card/claim       { mac, uid }  未設定の Dial をそのカードの人の専用にする（固定席）
 //   GET   /api/events           状態が変わるたびに "state" を送る（Server-Sent Events）
-//   GET   /api/device           StopWatch 用の軽い形式（1行1席のタブ区切り）
+//   GET   /api/device           StopWatch / Dial 用の軽い形式（1行1席のタブ区切り。#t 行は時間のひとことの残り秒）
 //   POST  /api/parts            パーツで作ったキャラを足す { by, label, feature, recipe, image }
 //   PUT   /api/parts/<id>       パーツで作ったキャラを直す（作った人だけ）
 const http = require("http");
@@ -30,9 +47,26 @@ const CHARACTERS_DIR = process.env.CHARACTERS_DIR || path.join(__dirname, "..", 
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, "data", "state.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
-// メンバーは members.json（自分のオフィス用。無ければ members.example.json のサンプル）
-const MEMBERS_FILE = ["members.json", "members.example.json"].map((f) => path.join(__dirname, f)).find((f) => fs.existsSync(f));
-const MEMBERS = JSON.parse(fs.readFileSync(MEMBERS_FILE, "utf8"));
+// 席の決め方。fixed（固定席）か free（フリーアドレス）
+const SEAT_MODE = (process.env.SEAT_MODE || "fixed").trim().toLowerCase();
+if (!["fixed", "free"].includes(SEAT_MODE)) {
+  console.error(`SEAT_MODE は fixed（固定席）か free（フリーアドレス）です（今は "${process.env.SEAT_MODE}"）`);
+  process.exit(1);
+}
+const FREE = SEAT_MODE === "free";
+
+// 席（島1つ・6席）。A が手前の列、B が奥の列
+const SEAT_CODES = ["A1", "A2", "A3", "B1", "B2", "B3"];
+
+// 名簿・カード・Dial（registry.js）。最初の起動だけ members.json（無ければ members.example.json のサンプル）から名簿を作る
+const { createRegistry } = require("./registry");
+const registry = createRegistry({
+  dataDir: path.dirname(DATA_FILE),
+  seedFiles: ["members.json", "members.example.json"].map((f) => path.join(__dirname, f)),
+  seats: SEAT_CODES,
+  mode: SEAT_MODE,
+  onChange() { syncMembers(); save(); broadcast(); },
+});
 // ひとりごとの定型文（マイページで見出しごとに並ぶ。気温・予定・声かけは Dial のジャンルと同じ文）
 const PRESET_GROUPS = [
   { label: "いま", items: ["集中モード", "休憩中", "会議中"] },
@@ -273,7 +307,6 @@ function spriteVersion(cid) {
 }
 
 // Dial 用（240x240）のはんこが6席そろっているか。Dial 対応より前に焼いたキャラには無い
-const SEAT_CODES = ["A1", "A2", "A3", "B1", "B2", "B3"];
 function hasDialSprites(cid) {
   return SEAT_CODES.every((s) => fs.existsSync(path.join(SPRITES_DIR, cid, "dial", `${s}.bin`)));
 }
@@ -304,17 +337,27 @@ function bakeMissing() {
 // ---------- 状態 ----------
 
 function freshMember() {
+  // seat: フリーアドレスで今日座っている席（座っていなければ null。夜のリセットで空く）。固定席では使わない（席は名簿）
+  // present: 席にいるか（フリーアドレスで false かつ seat があれば「離席中」。席は取ったまま）
   // back: 戻る時刻 "HH:MM"（不在タグに出す。在席に戻るか夜のリセットで消える） / originals: オリジナルの定型文
-  return { present: false, comment: null, back: null, originals: [], character: null, updatedAt: null };
+  return { seat: null, present: false, comment: null, back: null, originals: [], character: null, updatedAt: null };
 }
 
 function loadState() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); } catch {}
   s.members = s.members || {};
-  for (const m of MEMBERS) {
-    s.members[m.id] = { ...freshMember(), ...s.members[m.id] };
-    s.members[m.id].character = migrateCharacterId(s.members[m.id].character);
+  const taken = new Set();
+  for (const info of registry.members()) {
+    const old = s.members[info.id] || {};
+    const x = s.members[info.id] = { ...freshMember(), ...old };
+    x.character = migrateCharacterId(x.character);
+    if (!FREE) { x.seat = null; continue; }
+    // フリーアドレスの前の保存（seat が無い）：在席だった人はいつもの席に座らせる
+    if (!("seat" in old)) x.seat = x.present ? info.seat : null;
+    if (!SEAT_CODES.includes(x.seat) || taken.has(x.seat)) x.seat = null;
+    if (x.seat) taken.add(x.seat);
+    else x.present = false;
   }
   if (!s.lastResetAt) s.lastResetAt = lastResetBoundary(Date.now());
   return s;
@@ -322,6 +365,30 @@ function loadState() {
 
 let state = loadState();
 let saveTimer = null;
+
+// 登録・削除のあとで、状態を名簿に合わせる（増えた人は不在から、消えた人の状態は捨てる）
+function syncMembers() {
+  const ids = new Set(registry.members().map((m) => m.id));
+  for (const id of ids) if (!state.members[id]) state.members[id] = freshMember();
+  for (const id of Object.keys(state.members)) if (!ids.has(id)) delete state.members[id];
+}
+
+// 今それぞれの人が座っている席 { id: "A1" | null }。
+// 固定席は名簿の席（同じ席に2人いれば先の人。モードを切り替えたあとに起こりうる）、フリーアドレスは今日の席
+function seatMap() {
+  const out = {}, taken = new Set();
+  for (const info of registry.members()) {
+    const s = FREE ? state.members[info.id].seat : info.seat;
+    out[info.id] = s && !taken.has(s) ? s : null;
+    if (out[info.id]) taken.add(s);
+  }
+  return out;
+}
+
+// その席にいま座っている人の id（いなければ null）
+function seatHolder(seat, map = seatMap()) {
+  return Object.keys(map).find((id) => map[id] === seat) || null;
+}
 
 function save() {
   clearTimeout(saveTimer);
@@ -359,6 +426,14 @@ function clockToTime(hhmm, now) {
   return d.getTime();
 }
 
+const TIMER_KINDS = ["focus", "rest", "meeting", "out"];
+// Dial の言葉（マイページで人ごとに選ぶ。個人用の Dial は持ち主、机の Dial は座っている人の言葉。全体用は日本語）
+const LANGS = [
+  { id: "ja", label: "日本語" },
+  { id: "en", label: "English" },
+  { id: "zh", label: "中文（简体）" },
+];
+
 function commentUntil(duration, now) {
   if (duration === "30m") return now + 30 * 60 * 1000;
   if (duration === "2h") return now + 2 * 60 * 60 * 1000;
@@ -375,11 +450,12 @@ function tick(now = Date.now()) {
   if (state.lastResetAt < boundary) {
     for (const m of Object.values(state.members)) {
       if (m.present) { m.present = false; changed = true; }
+      if (m.seat) { m.seat = null; changed = true; }
       if (m.back) { m.back = null; changed = true; }
     }
     state.lastResetAt = boundary;
     save();
-    console.log(`[${new Date(now).toLocaleString("ja-JP")}] 夜のリセット：全員を不在にしました`);
+    console.log(`[${new Date(now).toLocaleString("ja-JP")}] 夜のリセット：${FREE ? "全員の席を空けました" : "全員を不在にしました"}`);
   }
   if (changed) save();
   return changed;
@@ -387,22 +463,33 @@ function tick(now = Date.now()) {
 
 function publicState() {
   const chars = Object.fromEntries(loadCharacters().map((c) => [c.id, c]));
+  const seats = seatMap();
   return {
+    mode: SEAT_MODE,
     resetAt: RESET_AT,
     commentMax: COMMENT_MAX,
     presets: PRESETS,
     presetGroups: PRESET_GROUPS,
     originalsMax: ORIGINALS_MAX,
     durations: DURATIONS,
-    members: MEMBERS.map((info) => {
+    langs: LANGS,
+    seats: SEAT_CODES,
+    desks: FREE ? registry.deskSeats() : [], // フリーアドレスで Dial が置いてある机
+    members: registry.members().map((info) => {
       const m = state.members[info.id];
       const c = m.character && chars[m.character];
       return {
-        ...info,
+        id: info.id,
+        name: info.name,
+        seat: seats[info.id],                   // 今座っている席（固定席は自分の席。席が無い・重なった人は null）
+        homeSeat: FREE ? info.seat : null,      // フリーアドレスの「いつもの席」
+        sample: !!info.sample,
+        card: info.card,
         present: m.present,
         comment: m.comment,
         back: m.back,
         originals: m.originals,
+        lang: m.lang || "ja",
         character: c ? { id: c.id, label: c.label, image: c.image } : null,
         updatedAt: m.updatedAt,
       };
@@ -412,15 +499,35 @@ function publicState() {
 
 // ---------- 更新 ----------
 
+const nameOf = (id) => { const info = registry.member(id); return info ? info.name : ""; };
+
 function applyPatch(id, body) {
   const m = state.members[id];
   if (!m) return [404, "そのメンバーはいません"];
   const now = Date.now();
   const next = {}; // 全部チェックしてからまとめて反映する
 
+  if ("seat" in body) {
+    if (!FREE) return [400, "固定席では、席は管理（/admin）で変えます"];
+    if (body.seat === null) {
+      Object.assign(next, { seat: null, present: false, back: null }); // 帰る：席を空ける
+    } else {
+      if (!SEAT_CODES.includes(body.seat)) return [400, "その席はありません"];
+      const who = seatHolder(body.seat);
+      if (who && who !== id) return [409, `${nameOf(who)}さんが座っています`];
+      Object.assign(next, { seat: body.seat, present: true }); // 座る
+    }
+  }
   if ("present" in body) {
     if (typeof body.present !== "boolean") return [400, "present は true / false"];
     next.present = body.present;
+    // フリーアドレスで席が無いまま在席にする：いつもの席が空いていればそこに座る
+    if (FREE && body.present && !(next.seat ?? m.seat)) {
+      const info = registry.member(id);
+      const home = info && info.seat;
+      if (!home || seatHolder(home)) return [400, "先に座る席を選んでください"];
+      next.seat = home;
+    }
   }
   if ("comment" in body) {
     if (body.comment === null) {
@@ -434,6 +541,8 @@ function applyPatch(id, body) {
       if ("until" in body.comment && !at) return [400, "until は HH:MM"];
       const duration = at ? "until" : DURATIONS.some((d) => d.id === body.comment.duration) ? body.comment.duration : "2h";
       next.comment = { text, duration, until: at || commentUntil(duration, now), at: now };
+      // timer: Dial の時間のひとこと（集中・休憩・会議・外出）。Dial のタイマー画面で残り時間を出す
+      if (at && TIMER_KINDS.includes(body.comment.timer)) next.comment.timer = body.comment.timer;
     }
   }
   if ("back" in body) {
@@ -453,6 +562,10 @@ function applyPatch(id, body) {
     if (list.length > ORIGINALS_MAX) return [400, `オリジナルは${ORIGINALS_MAX}個まで`];
     next.originals = list;
   }
+  if ("lang" in body) {
+    if (!LANGS.some((l) => l.id === body.lang)) return [400, "言葉は ja / en / zh"];
+    next.lang = body.lang;
+  }
   if ("character" in body) {
     if (body.character === null) {
       next.character = null;
@@ -464,10 +577,59 @@ function applyPatch(id, body) {
     }
   }
   if (next.present ?? m.present) next.back = null; // 在席なら戻り時刻はいらない
+  if (FREE && !(next.seat ?? m.seat) && next.present) return [400, "先に座る席を選んでください"];
   Object.assign(m, next, { updatedAt: now });
   save();
   broadcast();
   return [200, null];
+}
+
+// フリーアドレスで、その席にタッチした（机の Dial にカード・席の NFC タグにスマホ）。"sit" | "back" | "leave"
+//   その席にもう座っていて在席 → 帰る（席が空く） / 座っていて離席中 → 戻る / ほかの席・席なし → この席に座る
+//   その席に別の人がいれば、帰るのを忘れた人として席を空ける
+function tapSeat(id, seat) {
+  const m = state.members[id];
+  const now = Date.now();
+  let action;
+  if (m.seat === seat && m.present) {
+    Object.assign(m, { seat: null, present: false, back: null });
+    action = "leave";
+  } else if (m.seat === seat) {
+    Object.assign(m, { present: true, back: null });
+    action = "back";
+  } else {
+    const who = seatHolder(seat);
+    if (who && who !== id) Object.assign(state.members[who], { seat: null, present: false, back: null, updatedAt: now });
+    Object.assign(m, { seat, present: true, back: null });
+    action = "sit";
+  }
+  m.updatedAt = now;
+  save();
+  broadcast();
+  return action;
+}
+
+// Dial にカードがかざされた。Dial に返す1行（タブ区切り）の中身 [種類, ...]
+//   code 1234          未登録のカード（/join かマイページでこの番号を入れる）
+//   固定席      in / out 名前 (claim)   在席にした / 不在にした（claim：未設定の Dial なので「長押しで自分専用に」も出す）
+//               deny 持ち主の名前       ほかの人専用の Dial
+//   フリーアドレス sit 名前 席 / back 名前 席 / leave 名前 席   座った / 離席から戻った / 帰った（席が空いた）
+//               nodesk 名前             この Dial の机がまだ決まっていない（/admin で決める）
+function tapCard(mac, uid) {
+  registry.seen(mac);
+  const dial = registry.dialInfo(mac);
+  const who = registry.memberOfCard(uid);
+  let out;
+  if (!FREE && dial.role === "personal" && (!who || who.id !== dial.owner.id)) out = ["deny", dial.owner.name];
+  else if (!who || !state.members[who.id]) out = ["code", registry.issueCode(uid, mac)];
+  else if (FREE) out = dial.role === "desk" ? [tapSeat(who.id, dial.seat), who.name, dial.seat] : ["nodesk", who.name];
+  else {
+    const present = !state.members[who.id].present;
+    applyPatch(who.id, { present });
+    out = [present ? "in" : "out", who.name, dial.role === "none" ? "claim" : ""];
+  }
+  console.log(`[card] Dial ${mac.slice(-4)}（${dial.role}${dial.seat ? " " + dial.seat : ""}）→ ${out[0]} ${out[1] || ""}`);
+  return out;
 }
 
 // ---------- Server-Sent Events ----------
@@ -497,6 +659,11 @@ function sendJson(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function sendText(res, code, text) {
+  res.writeHead(code, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(text + "\n");
+}
+
 function sendFile(res, file) {
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end("not found"); return; }
@@ -524,22 +691,46 @@ const server = http.createServer(async (req, res) => {
   // StopWatch 用：JSON を読まずに済むよう、1行1席のタブ区切りテキストで返す
   //   席 \t id \t 在席(1/0) \t 名前 \t ひとりごと \t キャラ \t はんこの版（0 = まだ焼いていない）
   //   ?board=dial のときは Dial 用のはんこの版（Dial 用が無ければ 0 にして、端末はファームの絵で描く）
-  //   8列目は戻る時刻（"16:00"、無ければ空）。席の行のあとに、席と関係ない行を足す（古いファームは読み飛ばす）
+  //   8列目は戻る時刻（"16:00"、無ければ空）。だれもいない席は id と名前が空の行（端末は空いた机として描く）
+  //   席の行のあとに、席と関係ない行を足す（古いファームは読み飛ばす）
   //     #now \t サーバの時計（その日の 0 時からの秒）
+  //     #mode \t fixed | free（席の決め方。端末は不在の札を「不在」か「離席」にする）
   //     #o \t 席 \t オリジナルの文（1つ1行）
+  //     #dial \t 役割 \t 席 \t 持ち主の名前 \t 言葉（?mac= を付けて来た Dial だけ。registry.js の dialInfo）
+  //        役割 none / shared / personal（席 = 持ち主の席）/ desk（席 = 置いた机）
   if (p === "/api/device" && req.method === "GET") {
     tick();
     const clean = (s) => String(s || "").replace(/[\t\r\n]+/g, " ");
     const ids = chara3dIds();
     const dial = url.searchParams.get("board") === "dial";
     const ver = (cid) => (!cid || (dial && !hasDialSprites(cid)) ? 0 : spriteVersion(cid));
-    const lines = publicState().members.map((m) => {
+    const members = publicState().members;
+    const lines = SEAT_CODES.map((seat) => {
+      const m = members.find((x) => x.seat === seat);
+      if (!m) return [seat, "", 0, "", "", "", 0, ""].join("\t");
       const cid = displayCharacter(m, ids);
       return [m.seat, m.id, m.present ? 1 : 0, clean(m.name), clean(m.comment && m.comment.text), cid, ver(cid), clean(m.back)].join("\t");
     });
     const d = new Date();
     lines.push(`#now\t${d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()}`);
-    for (const m of publicState().members) for (const o of m.originals || []) lines.push(`#o\t${m.seat}\t${clean(o)}`);
+    lines.push(`#mode\t${SEAT_MODE}`);
+    for (const m of members) if (m.seat) for (const o of m.originals || []) lines.push(`#o\t${m.seat}\t${clean(o)}`);
+    // #t 席 種類 残り秒 全体の秒：時間のひとこと（Dial のタイマー画面）
+    const nowMs = Date.now();
+    for (const m of members) {
+      const c = m.seat && m.comment;
+      if (!c || !c.timer || !(c.until > nowMs)) continue;
+      lines.push(["#t", m.seat, c.timer, Math.round((c.until - nowMs) / 1000), Math.round((c.until - (c.at || nowMs)) / 1000)].join("\t"));
+    }
+    const mac = registry.cleanMac(url.searchParams.get("mac"));
+    if (registry.isMac(mac)) {
+      registry.seen(mac);
+      const info = registry.dialInfo(mac);
+      // 5 列目は言葉：個人用は持ち主、机は座っている人。全体用・未設定は ja
+      const who = info.role === "personal" ? info.owner && info.owner.id : info.role === "desk" && FREE ? seatHolder(info.seat) : null;
+      const st = who && state.members[who];
+      lines.push(["#dial", info.role, info.seat || "", clean(info.owner && info.owner.name), (st && st.lang) || "ja"].join("\t"));
+    }
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
     return res.end(lines.join("\n") + "\n");
   }
@@ -559,6 +750,85 @@ const server = http.createServer(async (req, res) => {
     try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
     const [code, error] = applyPatch(mm[1], body || {});
     return sendJson(res, code, error ? { error } : publicState());
+  }
+
+  // NFC タグ（/tap/<席>）からのタッチ。フリーアドレスだけ
+  const tm = p.match(/^\/api\/members\/([\w-]+)\/tap$/);
+  if (tm && req.method === "POST") {
+    let body;
+    try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+    if (!FREE) return sendJson(res, 400, { error: "席へのタッチはフリーアドレス（SEAT_MODE=free）のときだけ使えます" });
+    if (!state.members[tm[1]]) return sendJson(res, 404, { error: "そのメンバーはいません" });
+    const seat = body && body.seat;
+    if (!SEAT_CODES.includes(seat)) return sendJson(res, 400, { error: "その席はありません" });
+    const action = tapSeat(tm[1], seat);
+    console.log(`[tap] ${seat} ${nameOf(tm[1])} → ${action}`);
+    return sendJson(res, 200, { action, state: publicState() });
+  }
+
+  // Dial にカードがかざされた / 長押しで専用にする。返事は Dial が読みやすいようにタブ区切りの1行
+  if ((p === "/api/card" || p === "/api/card/claim") && req.method === "POST") {
+    let body;
+    try { body = await readBody(req); } catch { return sendText(res, 400, "ng\tJSON が読めません"); }
+    const mac = registry.cleanMac(body && body.mac);
+    const uid = String((body && body.uid) || "").toUpperCase().replace(/[^0-9A-F]/g, "");
+    if (!registry.isMac(mac) || uid.length < 8 || uid.length > 20) return sendText(res, 400, "ng\tmac か uid がおかしい");
+    if (p === "/api/card/claim") return sendText(res, 200, registry.claimByCard(mac, uid));
+    return sendText(res, 200, tapCard(mac, uid).map((x) => String(x).replace(/[\t\r\n]+/g, " ")).join("\t"));
+  }
+
+  // カードを結ぶ（Dial に出た番号）/ 外す
+  const cm = p.match(/^\/api\/members\/([\w-]+)\/card$/);
+  if (cm && (req.method === "POST" || req.method === "DELETE")) {
+    let error;
+    if (req.method === "DELETE") error = registry.unlinkCard(cm[1]);
+    else {
+      let body;
+      try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+      error = registry.linkCard(cm[1], body && body.code, !!(body && body.claimDial));
+    }
+    if (error) return sendJson(res, 400, { error });
+    return sendJson(res, 200, publicState());
+  }
+
+  // 番号の確認（/join とマイページ）
+  const codem = p.match(/^\/api\/codes\/(\d{4})$/);
+  if (codem && req.method === "GET") {
+    const info = registry.checkCode(codem[1]);
+    if (!info) return sendJson(res, 404, { error: "その番号は見つかりません（10 分で切れます。もう一度カードをかざしてください）" });
+    return sendJson(res, 200, info);
+  }
+
+  if (p === "/api/register" && req.method === "POST") {
+    let body;
+    try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+    const [code, out] = registry.register(body || {});
+    return sendJson(res, code, code === 200 ? out : { error: out });
+  }
+
+  // 管理：名前・席を直す / 消す
+  const am = p.match(/^\/api\/admin\/members\/([\w-]+)$/);
+  if (am && req.method === "PATCH") {
+    let body;
+    try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+    const [code, error] = registry.editMember(am[1], body || {});
+    return sendJson(res, code, error ? { error } : { ok: true });
+  }
+  if (am && req.method === "DELETE") {
+    return registry.removeMember(am[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "そのメンバーはいません" });
+  }
+
+  // 管理：Dial
+  if (p === "/api/dials" && req.method === "GET") return sendJson(res, 200, registry.dialList());
+  const dm = p.match(/^\/api\/dials\/([0-9a-f]{12})$/);
+  if (dm && req.method === "PATCH") {
+    let body;
+    try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
+    const [code, error] = registry.editDial(dm[1], body || {});
+    return sendJson(res, code, error ? { error } : registry.dialList());
+  }
+  if (dm && req.method === "DELETE") {
+    return registry.removeDial(dm[1]) ? sendJson(res, 200, registry.dialList()) : sendJson(res, 404, { error: "その Dial はありません" });
   }
 
   const pm = p.match(/^\/api\/parts(?:\/([a-z0-9][a-z0-9_-]{0,31}))?$/);
@@ -593,6 +863,10 @@ const server = http.createServer(async (req, res) => {
 
   if (p === "/") return sendFile(res, path.join(PUBLIC_DIR, "office.html"));
   if (p === "/me" || /^\/me\/[\w-]+$/.test(p)) return sendFile(res, path.join(PUBLIC_DIR, "me.html"));
+  if (p === "/join") return sendFile(res, path.join(PUBLIC_DIR, "join.html"));
+  if (p === "/admin") return sendFile(res, path.join(PUBLIC_DIR, "admin.html"));
+  if (p === "/tap" || /^\/tap\/[A-Z0-9]+$/.test(p)) return sendFile(res, path.join(PUBLIC_DIR, "tap.html"));
+  if (p === "/desks") { res.writeHead(302, { Location: "/admin" }); return res.end(); } // 前の「机の Dial」の画面は管理にまとめた
 
   // public/ 以下の静的ファイル
   const file = path.normalize(path.join(PUBLIC_DIR, p));
@@ -615,7 +889,9 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log("電脳オフィス サーバを起動しました");
   console.log(`  この Mac:  http://localhost:${PORT}/`);
   for (const ip of ips) console.log(`  社内LAN:   http://${ip}:${PORT}/`);
-  console.log(`  夜のリセット: 毎日 ${RESET_AT}（全員を不在に戻す）`);
+  console.log(`  席の決め方: ${FREE ? "フリーアドレス（SEAT_MODE=free）" : "固定席（SEAT_MODE=fixed）"}`);
+  console.log(`  夜のリセット: 毎日 ${RESET_AT}（${FREE ? "全員の席を空ける" : "全員を不在に戻す"}）`);
+  console.log(`  登録: http://localhost:${PORT}/join　管理: http://localhost:${PORT}/admin${FREE ? `　NFC タグの URL: http://<社内LAN のアドレス>:${PORT}/tap` : ""}`);
   // StopWatch 用のはんこ：起動時と、その後10分ごとに新しく完成したキャラを焼く
   bakeMissing();
   setInterval(bakeMissing, 10 * 60 * 1000);

@@ -109,3 +109,33 @@ header.top h1, header.top nav > * { white-space: nowrap; }
   content: ""; position: absolute; left: 18px; bottom: -6px; border: 6px solid transparent;
   border-bottom: 0; border-top-color: var(--paper);
 }
+
+/* 登録（/join・マイページのカード・/admin） */
+.field {
+  width: 100%; font: inherit; color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+}
+.codein {
+  width: 7.5em; font-family: var(--font-mono); font-size: 22px; letter-spacing: .3em; text-align: center;
+  color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px;
+}
+.codestat { font-size: 13px; min-height: 1.6em; margin-top: 8px; color: var(--muted); }
+.codestat.ok { color: var(--ok); }
+.codestat.ng { color: var(--danger); }
+.check { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; margin-top: 4px; }
+.check[hidden] { display: none; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.seats { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; max-width: 520px; }
+.seats .row { font-size: 11px; color: var(--muted); padding-right: 4px; }
+.seats button {
+  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 10px 6px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 64px; transition: border-color .15s, box-shadow .15s;
+}
+.seats button b { font-family: var(--font-mono); font-size: 14px; }
+.seats button span { font-size: 12px; color: var(--muted); }
+.seats button:hover:not(:disabled) { border-color: var(--accent); }
+.seats button[aria-pressed="true"] { border-color: var(--glow); box-shadow: 0 0 0 1px var(--glow), 0 0 16px rgba(127, 162, 255, .35); }
+.seats button[aria-pressed="true"] span { color: var(--accent); }
+.seats button:disabled { cursor: default; opacity: .45; }
+.seats button:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+.seats .desk { grid-column: 2 / 5; height: 10px; border-radius: 4px; background: #1e2840; }

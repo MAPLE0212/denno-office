@@ -333,7 +333,11 @@ static void netTask(void*) {
   }
 }
 
+// サーバの席の決め方（#mode 行）。フリーアドレスなら不在の札を「離席」にする（席は取ったまま席を外している人）
+static bool freeMode = false;
+
 // 届いた状態を席に反映（画面側で呼ぶ）。1行 = 席 \t id \t 在席 \t 名前 \t ひとりごと
+// だれもいない席は id・名前が空の行で届く
 static void applyInbox() {
   String body;
   xSemaphoreTake(netLock, portMAX_DELAY);
@@ -353,9 +357,10 @@ static void applyInbox() {
     for (int k = 0; k < 5; k++) {
       int t = line.indexOf('\t', start);
       if (t < 0) t = line.length();
-      f[k] = line.substring(start, t);
+      f[k] = start <= (int)line.length() ? line.substring(start, t) : String("");
       start = t + 1;
     }
+    if (f[0] == "#mode") { freeMode = f[1] == "free"; continue; }
     for (int i = 0; i < 6; i++) {
       if (f[0] != S[i].code) continue;
       S[i].id = f[1];
@@ -409,7 +414,7 @@ static void drawBubble(int i) {
 
 static void drawAwayTag(int i) {
   const SeatArt& a = SEATS[i];
-  String t = S[i].name + " 不在";
+  String t = S[i].name + (freeMode ? " 離席" : " 不在");
   canvas.setFont(&fonts::lgfxJapanGothic_12);
   int tw = canvas.textWidth(t) + 10;
   int x = a.chairX - tw / 2, y = a.chairY - 8;
@@ -420,7 +425,7 @@ static void drawAwayTag(int i) {
 }
 
 static void drawSelection() {
-  String t = String("操作中 ") + S[selected].code + " " + S[selected].name;
+  String t = String("操作中 ") + S[selected].code + " " + (S[selected].name.length() ? S[selected].name : String("空き"));
   canvas.setFont(&fonts::lgfxJapanGothic_12);
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(C565(140, 170, 255));
@@ -445,7 +450,7 @@ static void render() {
     else blit(SEATS[i].x, SEATS[i].y, SEATS[i].h, closed ? SEATS[i].blink[f] : SEATS[i].open[f]);
     if (s.blinkLeft > 0) s.blinkLeft--;
   }
-  for (int i = 0; i < 6; i++) if (!S[i].present) drawAwayTag(i);
+  for (int i = 0; i < 6; i++) if (!S[i].present && S[i].name.length()) drawAwayTag(i);  // 名前が空 = だれもいない席
   for (int n = 0; n < 6; n++) drawBubble(DRAW_ORDER[n]);
   drawSelection();
   canvas.pushSprite(0, 0);
@@ -525,7 +530,7 @@ void loop() {
     auto t = M5.Touch.getDetail();
     if (t.wasClicked()) {
       int i = seatAt(t.x, t.y);
-      if (i >= 0) { S[i].present = !S[i].present; selected = i; sendPresent(i); }
+      if (i >= 0) { selected = i; if (S[i].name.length()) { S[i].present = !S[i].present; sendPresent(i); } }  // だれもいない席は選ぶだけ
     }
   }
 
