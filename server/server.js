@@ -259,9 +259,15 @@ function displayCharacter(m, ids) {
   return ids.length && i >= 0 ? ids[i % ids.length] : "";
 }
 
-// 焼いた日時（まだ焼いていなければ 0）。StopWatch はこれが変わったら取り直す
+// 焼いた日時（まだ焼いていなければ 0）。StopWatch / Dial はこれが変わったら取り直す
 function spriteVersion(cid) {
   try { return JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, cid, "meta.json"), "utf8")).bakedAt || 0; } catch { return 0; }
+}
+
+// Dial 用（240x240）のはんこが6席そろっているか。Dial 対応より前に焼いたキャラには無い
+const SEAT_CODES = ["A1", "A2", "A3", "B1", "B2", "B3"];
+function hasDialSprites(cid) {
+  return SEAT_CODES.every((s) => fs.existsSync(path.join(SPRITES_DIR, cid, "dial", `${s}.bin`)));
 }
 
 // まだ焼いていない（または <id>.html が焼いた後に直された）完成キャラを焼く。tools/.venv が無ければ何もしない
@@ -271,7 +277,7 @@ function bakeMissing() {
   if (baking || !fs.existsSync(py)) return;
   const todo = chara3dIds().filter((cid) => {
     const v = spriteVersion(cid);
-    return !v || charaEditedAt(cid) > v;
+    return !v || charaEditedAt(cid) > v || !hasDialSprites(cid);
   });
   if (!todo.length) return;
   baking = true;
@@ -472,13 +478,16 @@ const server = http.createServer(async (req, res) => {
 
   // StopWatch 用：JSON を読まずに済むよう、1行1席のタブ区切りテキストで返す
   //   席 \t id \t 在席(1/0) \t 名前 \t ひとりごと \t キャラ \t はんこの版（0 = まだ焼いていない）
+  //   ?board=dial のときは Dial 用のはんこの版（Dial 用が無ければ 0 にして、端末はファームの絵で描く）
   if (p === "/api/device" && req.method === "GET") {
     tick();
     const clean = (s) => String(s || "").replace(/[\t\r\n]+/g, " ");
     const ids = chara3dIds();
+    const dial = url.searchParams.get("board") === "dial";
+    const ver = (cid) => (!cid || (dial && !hasDialSprites(cid)) ? 0 : spriteVersion(cid));
     const lines = publicState().members.map((m) => {
       const cid = displayCharacter(m, ids);
-      return [m.seat, m.id, m.present ? 1 : 0, clean(m.name), clean(m.comment && m.comment.text), cid, cid ? spriteVersion(cid) : 0].join("\t");
+      return [m.seat, m.id, m.present ? 1 : 0, clean(m.name), clean(m.comment && m.comment.text), cid, ver(cid)].join("\t");
     });
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
     return res.end(lines.join("\n") + "\n");
@@ -522,8 +531,8 @@ const server = http.createServer(async (req, res) => {
     return res.end(charasModule());
   }
 
-  const sp = p.match(/^\/sprites\/([a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*)\/([AB][1-3])\.bin$/);
-  if (sp && ID_RE.test(sp[1])) return sendFile(res, path.join(SPRITES_DIR, sp[1], `${sp[2]}.bin`));
+  const sp = p.match(/^\/sprites\/([a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*)\/(dial\/)?([AB][1-3])\.bin$/);
+  if (sp && ID_RE.test(sp[1])) return sendFile(res, path.join(SPRITES_DIR, sp[1], sp[2] ? "dial" : "", `${sp[3]}.bin`));
 
   const im = p.match(/^\/img\/chars\/(.+)\.png$/);
   if (im && ID_RE.test(im[1])) {

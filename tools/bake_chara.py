@@ -1,9 +1,11 @@
-"""StopWatch 用に、characters/ の完成キャラを6席分の「はんこ」（差分スプライト）として焼く。
+"""StopWatch / M5Dial 用に、characters/ の完成キャラを6席分の「はんこ」（差分スプライト）として焼く。
 
 usage: .venv/bin/python bake_chara.py maple/c03 [maple/c15 ...]     （サーバ server/server.js を起動しておく）
   - キャラは サーバの /charas.js から読む（DENNO_SERVER で場所を変更、既定 http://localhost:8080）
   - キャラの ID は "<作成者>/<id>"（characters/<作成者>/<id>.html）
   - 出力: ../server/sprites/<作成者>/<id>/<A1..B3>.bin と bake_out/<作成者>_<id>_preview.png（実機の背景に6席重ねた見本）
+          Dial 用（240x240、466 の絵を pack_dial.py と同じく縮めたもの）は ../server/sprites/<作成者>/<id>/dial/<A1..B3>.bin
+          と bake_out/<作成者>_<id>_preview_dial.png
 
 .bin の形式（リトルエンディアン）
   "DSP1" / uint16 x, y, w, h / uint16 frames / uint16 hasBlink /
@@ -14,6 +16,7 @@ import sys, os, re, io, json, base64, struct, time, threading, functools, http.s
 import numpy as np
 from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright
+from pack_dial import shrink, DST as DIAL
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 NM = os.path.join(ROOT, "node_modules")
@@ -67,6 +70,39 @@ def rle(img, mask):
     return out
 
 
+def pack_seat(frames, bg, has_blink, path):
+    """1 席ぶんのコマ（{(まばたき, k): 絵}）を .bin に書く。(バイト数, 3コマ目の絵, そのマスク) を返す"""
+    masks = {key: np.abs(img - bg).sum(axis=2) > THR for key, img in frames.items()}
+    uni = np.any(list(masks.values()), axis=0)
+    ys, xs = np.nonzero(uni)
+    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+    datas = []
+    for key in sorted(frames):  # (False, 0..N-1) → (True, 0..N-1)
+        mk = masks[key][y0:y1, x0:x1]
+        g = mk.copy(); g[1:] |= mk[:-1]; g[:-1] |= mk[1:]; g[:, 1:] |= mk[:, :-1]; g[:, :-1] |= mk[:, 1:]  # グローの縁を1px残す
+        datas.append(rle(frames[key][y0:y1, x0:x1], g))
+    offs, pos = [], 0
+    for d in datas:
+        offs.append(pos)
+        pos += len(d) * 2
+    head = b"DSP1" + struct.pack("<6H", x0, y0, x1 - x0, y1 - y0, N, 1 if has_blink else 0)
+    body = struct.pack(f"<{len(offs)}I", *offs) + b"".join(struct.pack(f"<{len(d)}H", *d) for d in datas)
+    open(path, "wb").write(head + body)
+    return len(head) + len(body), (x0, y0, x1 - x0, y1 - y0), frames[(False, 3)], masks[(False, 3)]
+
+
+def save_preview(base, layers, size, path):
+    """実機と同じく 奥(B) → 手前(A) の順に、3コマ目を実機の背景へ重ねて丸く切る"""
+    canvas = base.copy()
+    for s in (3, 4, 5, 0, 1, 2):
+        img, mk3 = layers[s]
+        canvas[mk3] = img[mk3]
+    pv = Image.fromarray(canvas.astype(np.uint8))
+    mk = Image.new("L", (size, size), 0); ImageDraw.Draw(mk).ellipse((0, 0, size - 1, size - 1), fill=255)
+    o = Image.new("RGB", (size, size)); o.paste(pv, (0, 0), mk)
+    o.save(path)
+
+
 class Q(http.server.SimpleHTTPRequestHandler):
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, ".html": "text/html; charset=utf-8", ".js": "application/javascript"}
     def log_message(self, *a): pass
@@ -109,45 +145,30 @@ with sync_playwright() as p:
         Image.fromarray(bg.astype(np.uint8)).save(os.path.join(OUT_PREVIEW, "bg_mismatch.png"))
         sys.exit("背景が実機と合いません（bake_out/bg_mismatch.png を確認）")
 
+    bg_dial = shrink(bg)
     for cid in cids:
         t0 = time.time()
         open_page(f"?c={urllib.parse.quote(cid)}")
-        canvas = DEVICE_BG.copy()
-        os.makedirs(os.path.join(OUT_SPRITES, cid), exist_ok=True)
-        total = 0
-        layers = {}
+        os.makedirs(os.path.join(OUT_SPRITES, cid, "dial"), exist_ok=True)
+        total = total_dial = 0
+        layers, layers_dial = {}, {}
         for s, code in enumerate(SEAT_CODES):
             blinks = (False, True) if s >= 3 else (False,)  # まばたきは顔が見える奥の列だけ
             frames = {(bl, k): shot(only=s, k=k, blink=bl) for bl in blinks for k in range(N)}
-            masks = {key: np.abs(img - bg).sum(axis=2) > THR for key, img in frames.items()}
-            uni = np.any(list(masks.values()), axis=0)
-            ys, xs = np.nonzero(uni)
-            x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-            datas = []
-            for key in sorted(frames):  # (False, 0..N-1) → (True, 0..N-1)
-                mk = masks[key][y0:y1, x0:x1]
-                g = mk.copy(); g[1:] |= mk[:-1]; g[:-1] |= mk[1:]; g[:, 1:] |= mk[:, :-1]; g[:, :-1] |= mk[:, 1:]  # グローの縁を1px残す
-                datas.append(rle(frames[key][y0:y1, x0:x1], g))
-            offs, pos = [], 0
-            for d in datas:
-                offs.append(pos)
-                pos += len(d) * 2
-            head = b"DSP1" + struct.pack("<6H", x0, y0, x1 - x0, y1 - y0, N, 1 if len(blinks) == 2 else 0)
-            body = struct.pack(f"<{len(offs)}I", *offs) + b"".join(struct.pack(f"<{len(d)}H", *d) for d in datas)
-            path = os.path.join(OUT_SPRITES, cid, f"{code}.bin")
-            open(path, "wb").write(head + body)
-            total += len(head) + len(body)
-            layers[s] = (frames[(False, 3)], masks[(False, 3)])
-            print(f"  {cid} {code}: rect {x0},{y0} {x1 - x0}x{y1 - y0}  {(len(head) + len(body)) / 1024:.0f} KB")
-        # 見本：実機と同じく 奥(B) → 手前(A) の順に、3コマ目を実機の背景へ重ねる
-        for s in (3, 4, 5, 0, 1, 2):
-            img, mk3 = layers[s]
-            canvas[mk3] = img[mk3]
-        pv = Image.fromarray(canvas.astype(np.uint8))
-        mk = Image.new("L", (466, 466), 0); ImageDraw.Draw(mk).ellipse((0, 0, 465, 465), fill=255)
-        o = Image.new("RGB", (466, 466)); o.paste(pv, (0, 0), mk)
-        o.save(os.path.join(OUT_PREVIEW, f"{cid.replace('/', '_')}_preview.png"))
-        json.dump({"cid": cid, "bakedAt": int(time.time()), "bytes": total}, open(os.path.join(OUT_SPRITES, cid, "meta.json"), "w"))
-        print(f"{cid}: {total / 1024:.0f} KB, {time.time() - t0:.0f} s")
+            n, (x, y, w, h), img3, mk3 = pack_seat(frames, bg, len(blinks) == 2, os.path.join(OUT_SPRITES, cid, f"{code}.bin"))
+            total += n
+            layers[s] = (img3, mk3)
+            print(f"  {cid} {code}: rect {x},{y} {w}x{h}  {n / 1024:.0f} KB")
+            # Dial 用：同じコマを 240 に縮めて焼く
+            frames_d = {key: shrink(img) for key, img in frames.items()}
+            n, (x, y, w, h), img3, mk3 = pack_seat(frames_d, bg_dial, len(blinks) == 2, os.path.join(OUT_SPRITES, cid, "dial", f"{code}.bin"))
+            total_dial += n
+            layers_dial[s] = (img3, mk3)
+            print(f"  {cid} {code} (Dial): rect {x},{y} {w}x{h}  {n / 1024:.0f} KB")
+        save_preview(DEVICE_BG, layers, 466, os.path.join(OUT_PREVIEW, f"{cid.replace('/', '_')}_preview.png"))
+        save_preview(bg_dial, layers_dial, DIAL, os.path.join(OUT_PREVIEW, f"{cid.replace('/', '_')}_preview_dial.png"))
+        json.dump({"cid": cid, "bakedAt": int(time.time()), "bytes": total, "dialBytes": total_dial},
+                  open(os.path.join(OUT_SPRITES, cid, "meta.json"), "w"))
+        print(f"{cid}: {total / 1024:.0f} KB（Dial {total_dial / 1024:.0f} KB）, {time.time() - t0:.0f} s")
     b.close()
 srv.shutdown()
