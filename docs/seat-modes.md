@@ -37,10 +37,10 @@ SEAT_MODE=free node server/server.js   # フリーアドレス
 |---|---|---|
 | 全体用 | 登録したカードなら誰でも、その人の在席 / 不在 | 回す・タップで席を選んで名前を見るだけ |
 | 個人用 | 持ち主のカードだけ。ほかのカードは「〇〇さん専用」 | 押す・タップ = 持ち主のひとこと選び、長押し = 持ち主の在席 / 不在 |
-| 未設定 | 全体用と同じ。かざした直後（6 秒以内）につまみを長押しすると、その人の個人用になる | 全体用と同じ |
+| 未設定 | 全体用と同じ | 全体用と同じ |
 
 - 個人用の Dial は、持ち主が不在のあいだ背景がゆっくり明るくなったり戻ったりします（「いるのに不在のまま」に気づけるように）。
-- 登録のとき、自分の机のまだ未設定の Dial にカードをかざして番号を出し、「この Dial を自分専用にする」にチェックすると、カードと Dial の両方がその人のものになります。マイページからも同じことができ、「専用をやめる」で戻せます。
+- 個人用にするのは `/admin` だけです（持ち主を選ぶ）。個人用の Dial は持ち主以外のカードを受け付けないので、カードの登録番号は全体用か未設定の Dial で出します。
 
 ## フリーアドレス
 
@@ -94,23 +94,22 @@ Dial の読み取り部品は ISO14443A（MIFARE など、よくある白い IC 
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| POST | `/api/register` | 登録 `{ name, seat?, code?, claimDial? }` → `{ id }`（固定席は seat が要る） |
-| GET | `/api/codes/<番号>` | Dial に出た 4 桁の番号の確認 → `{ canClaim, dialRole, usedBy }` |
-| POST / DELETE | `/api/members/<id>/card` | カードを結ぶ `{ code, claimDial? }` / 外す |
+| POST | `/api/register` | 登録 `{ name, seat?, code? }` → `{ id }`（固定席は seat が要る） |
+| GET | `/api/codes/<番号>` | Dial に出た 4 桁の番号の確認 → `{ dialRole, usedBy }` |
+| POST / DELETE | `/api/members/<id>/card` | カードを結ぶ `{ code }` / 外す |
 | PATCH | `/api/members/<id>` | `{ seat: "A2" \| null }` で座る / 帰る（フリーアドレス。ほかの人がいれば 409） |
 | POST | `/api/members/<id>/tap` | `{ seat: "A2" }` NFC タグからのタッチ（フリーアドレス）→ `{ action: "sit" \| "back" \| "leave", state }` |
 | PATCH / DELETE | `/api/admin/members/<id>` | 名前・席を直す `{ name?, seat?, card?: null }` / 消す |
 | GET | `/api/dials` | Dial の一覧 |
 | PATCH / DELETE | `/api/dials/<mac>` | 役割を変える `{ role, owner?, seat?, label? }` / 一覧から消す。role は固定席 `none` `shared` `personal`、フリーアドレス `none` `desk` |
 | POST | `/api/card` | Dial から `{ mac, uid }`。答えはタブ区切りの 1 行（下） |
-| POST | `/api/card/claim` | Dial から `{ mac, uid }`。未設定の Dial をそのカードの人の専用にする（固定席）→ `ok 名前` / `ng 理由` |
 
 `/api/card` の答え：
 
 | 答え | いつ |
 |---|---|
 | `code 1234` | 未登録のカード |
-| `in 名前 (claim)` / `out 名前 (claim)` | 固定席で在席 / 不在にした。`claim` は「長押しで自分専用に」を出してよい（未設定の Dial） |
+| `in 名前` / `out 名前` | 固定席で在席 / 不在にした |
 | `deny 持ち主` | 固定席で、ほかの人の個人用の Dial |
 | `sit 名前 席` / `back 名前 席` / `leave 名前 席` | フリーアドレスで座った / 離席から戻った / 帰った |
 | `nodesk 名前` | フリーアドレスで、机が未設定の Dial |

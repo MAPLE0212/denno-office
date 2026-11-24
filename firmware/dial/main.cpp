@@ -247,7 +247,7 @@ static bool inboxNew = false;
 static const int OUT_MAX = 8;
 static String outbox[OUT_MAX];  // 画面側 → ネット側："id<TAB>JSON" の PATCH 待ち
 static int outN = 0;
-static String cardJob;        // 画面側 → ネット側："card<TAB>番号"（POST /api/card 待ち）か "claim<TAB>番号"（/api/card/claim）
+static String cardJob;        // 画面側 → ネット側：カードの番号（POST /api/card 待ち）
 static String cardReply;      // ネット側 → 画面側：その答え（"sit\t佐藤\tA2" など。届かなければ "net"）
 static bool cardReplyNew = false;
 static String macHex;         // この Dial の MAC（12 桁、サーバに送る）
@@ -543,16 +543,15 @@ static void netTask(void*) {
       }
     }
 
-    // かざされたカードがあれば、いちばん先に送る（答えを画面に出すので待たせない）。cardJob = "card|claim <TAB> 番号"
+    // かざされたカードがあれば、いちばん先に送る（答えを画面に出すので待たせない）。cardJob = カードの番号
     String job0;
     xSemaphoreTake(netLock, portMAX_DELAY);
     job0 = cardJob;
     cardJob = "";
     xSemaphoreGive(netLock);
     if (job0.length()) {
-      int tab = job0.indexOf('\t');
-      String path = job0.substring(0, tab) == "claim" ? "/api/card/claim" : "/api/card";
-      String uid = job0.substring(tab + 1);
+      String path = "/api/card";
+      String uid = job0;
       HTTPClient h;
       h.setConnectTimeout(2000);
       h.setTimeout(3000);
@@ -893,13 +892,10 @@ static void drawNotice() {
   canvas.drawString(noteSub, 120, 157);
 }
 
-static String claimUid;        // 「長押しでこの Dial を自分専用に」を出しているカード（固定席の未設定の Dial）
-static uint32_t claimUntil = 0;
-
-// カードの番号（"04A1B2C3"）をサーバへ送る予約。kind は "card"（かざした）か "claim"（専用にする）
-static void sendCard(const char* kind, const String& uid) {
+// カードの番号（"04A1B2C3"）をサーバへ送る予約
+static void sendCard(const String& uid) {
   xSemaphoreTake(netLock, portMAX_DELAY);
-  cardJob = String(kind) + "\t" + uid;
+  cardJob = uid;
   xSemaphoreGive(netLock);
   cardWaiting = true;
   cardSentAt = millis();
@@ -907,9 +903,7 @@ static void sendCard(const char* kind, const String& uid) {
 
 static void tapCard(const String& uid) {
   if (!netEnabled()) { notice("カード " + uid, "お試し中", "Wi-Fi の設定がありません", C565(255, 170, 80), 3000); return; }
-  claimUntil = 0;
-  claimUid = uid;
-  sendCard("card", uid);
+  sendCard(uid);
   notice("カードを読みました", "…", "サーバに聞いています", accent(), 8000);
   M5.Speaker.tone(2000, 40);
 }
@@ -931,20 +925,12 @@ static void applyCardReply() {
   String f[3];
   splitTabs(r, f, 3);
   uint16_t ok = C565(126, 224, 184), warn = C565(255, 170, 80);
-  if (f[0] == "in" || f[0] == "out") {  // 固定席：在席 / 不在。claim なら「長押しで自分専用に」も出す
-    bool claim = f[2] == "claim";
+  if (f[0] == "in" || f[0] == "out") {  // 固定席：在席 / 不在
     bool in = f[0] == "in";
-    notice(f[1] + L().san, in ? L().hello : L().bye, claim ? "長押しでこの Dial を自分専用に" : in ? L().setIn : L().setOut,
-           in ? ok : accent(), claim ? 6000 : 3000);
-    claimUntil = claim ? millis() + 6000 : 0;
+    notice(f[1] + L().san, in ? L().hello : L().bye, in ? L().setIn : L().setOut, in ? ok : accent(), 3000);
     M5.Speaker.tone(in ? 2600 : 1600, in ? 60 : 80);
   } else if (f[0] == "deny") {
     notice("この Dial は", f[1] + " さん専用", "全体用の Dial を使ってね", warn, 3000);
-  } else if (f[0] == "ok") {
-    notice("この Dial を", f[1] + " さん専用", "にしました", ok, 3000);
-    M5.Speaker.tone(2600, 60);
-  } else if (f[0] == "ng") {
-    notice("できませんでした", f[1], "", warn, 3000);
   } else if (f[0] == "sit") {
     notice(f[1] + L().san, L().hello, fmt(L().sat, f[2]), ok, 3000);
     nameUntil = millis() + 4000;
@@ -1703,14 +1689,7 @@ static void handleInput() {
       selected = DIAL_ORDER[k];
       nameUntil = millis() + 1500;
     }
-    // カードの直後の「長押しでこの Dial を自分専用に」
-    if (hold && (int32_t)(millis() - claimUntil) < 0) {
-      claimUntil = 0;
-      sendCard("claim", claimUid);
-      notice("この Dial を", "専用にしています…", "", accent(), 8000);
-      return;
-    }
-    if ((click || tap) && noticeShown()) { noteUntil = 0; claimUntil = 0; return; }  // 出ている知らせを閉じる
+    if ((click || tap) && noticeShown()) { noteUntil = 0; return; }  // 出ている知らせを閉じる
     if (swipe) { noteUntil = 0; openTimer(focusSeat()); return; }  // 時間のひとことの残り時間
 
     if (!netEnabled()) {  // お試し：今までどおり全部の席を動かせる

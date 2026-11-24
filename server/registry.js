@@ -107,32 +107,30 @@ function createRegistry({ dataDir, seedFiles, seats, mode, onChange }) {
     return v && v.expires >= Date.now() ? v : null;
   }
 
-  // /join・マイページで番号を確かめる。canClaim：番号を出した Dial を「自分専用」にできる（固定席の未設定の Dial）
+  // /join・マイページで番号を確かめる
   function checkCode(code) {
     const v = useCode(code);
     if (!v) return null;
     const d = reg.dials[v.mac];
     const other = byCard(v.card);
-    return { canClaim: fixed && !!d && roleOf(d) === "none", dialRole: d ? roleOf(d) : null, usedBy: other ? { id: other.id, name: other.name } : null };
+    return { dialRole: d ? roleOf(d) : null, usedBy: other ? { id: other.id, name: other.name } : null };
   }
 
   // 番号で見つけたカードを人に付ける（前のカードは使えなくなる）。エラーなら文を返す
-  function attachCard(m, code, claimDial) {
+  function attachCard(m, code) {
     const v = useCode(code);
     if (!v) return CODE_ERROR;
     const other = byCard(v.card);
     if (other && other.id !== m.id) return `このカードはもう ${other.name} さんが使っています`;
     m.card = v.card;
-    const d = reg.dials[v.mac];
-    if (claimDial && fixed && d && roleOf(d) === "none") Object.assign(d, { role: "personal", owner: m.id });
     for (const [c, x] of codes) if (x.card === v.card) codes.delete(c);
     return null;
   }
 
-  function linkCard(id, code, claimDial) {
+  function linkCard(id, code) {
     const m = member(id);
     if (!m) return "そのメンバーはいません";
-    const err = attachCard(m, code, claimDial);
+    const err = attachCard(m, code);
     if (err) return err;
     delete m.sample;
     changed();
@@ -155,7 +153,7 @@ function createRegistry({ dataDir, seedFiles, seats, mode, onChange }) {
     return `u${String(n + 1).padStart(3, "0")}`;
   }
 
-  // /join から { name, seat, code?, claimDial? }。[状態コード, エラー or { id }]
+  // /join から { name, seat, code? }。[状態コード, エラー or { id }]
   function register(body) {
     const name = cleanName(body.name);
     if (!name) return [400, "名前を入れてください"];
@@ -171,7 +169,7 @@ function createRegistry({ dataDir, seedFiles, seats, mode, onChange }) {
     dropSamples(seat);
     const m = { id: nextId(), name, seat, card: null, createdAt: Date.now() };
     reg.members.push(m);
-    if (body.code) attachCard(m, body.code, !!body.claimDial);
+    if (body.code) attachCard(m, body.code);
     changed();
     console.log(`登録: ${m.id} ${m.name}${seat ? `（${seat}）` : ""}`);
     return [200, { id: m.id }];
@@ -240,18 +238,6 @@ function createRegistry({ dataDir, seedFiles, seats, mode, onChange }) {
     return { role, seat: role === "desk" ? d.seat : o ? o.seat : null, owner: o ? { id: o.id, name: o.name } : null };
   }
 
-  // 未設定の Dial を、かざしたカードの人の専用にする（固定席。Dial で長押し）。Dial に返す 1 行
-  function claimByCard(mac, uid) {
-    const d = seen(mac);
-    const m = byCard(fingerprint(uid));
-    if (!fixed) return "ng\tフリーアドレスでは使えません";
-    if (!m) return "ng\t登録されていないカード";
-    if (roleOf(d) !== "none") return "ng\tこの Dial はもう設定済み";
-    Object.assign(d, { role: "personal", owner: m.id });
-    changed();
-    return `ok\t${m.name}`;
-  }
-
   function dialList() {
     const now = Date.now();
     return Object.entries(reg.dials).map(([mac, d]) => {
@@ -303,7 +289,7 @@ function createRegistry({ dataDir, seedFiles, seats, mode, onChange }) {
     memberOfCard: (uid) => byCard(fingerprint(uid)) || null,
     issueCode, checkCode, linkCard, unlinkCard,
     register, editMember, removeMember: (id) => removeMember(id),
-    seen, dialInfo, claimByCard, dialList, editDial, removeDial,
+    seen, dialInfo, dialList, editDial, removeDial,
     // フリーアドレスで Dial を置いてある机
     deskSeats: () => [...new Set(Object.keys(reg.dials).map((mac) => dialInfo(mac)).filter((x) => x.role === "desk").map((x) => x.seat))],
   };

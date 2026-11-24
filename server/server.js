@@ -24,13 +24,12 @@
 //   GET   /api/characters       キャラ一覧（characters/<作成者>/characters.json から）
 //   PATCH /api/members/<id>     { seat?: "A1" | null（フリーアドレス）, present?, comment?: {text, duration か until・timer} | null, back?, originals?, lang?: "ja" | "en" | "zh", character?: "maple/c01" | null }
 //   POST  /api/members/<id>/tap { seat: "A1" }  席に座る / 戻る / 帰る（フリーアドレス。NFC タグ）→ { action: "sit" | "back" | "leave", state }
-//   POST  /api/members/<id>/card { code, claimDial? }  Dial に出た番号で、カードをその人のものにする / DELETE で外す
-//   GET   /api/codes/<番号>     Dial に出た 4 桁の番号の確認 → { canClaim, dialRole, usedBy }
-//   POST  /api/register         { name, seat?, code?, claimDial? }  登録 → { id }
+//   POST  /api/members/<id>/card { code }  Dial に出た番号で、カードをその人のものにする / DELETE で外す
+//   GET   /api/codes/<番号>     Dial に出た 4 桁の番号の確認 → { dialRole, usedBy }
+//   POST  /api/register         { name, seat?, code? }  登録 → { id }
 //   PATCH /api/admin/members/<id> { name?, seat?, card?: null } / DELETE で名簿から消す
 //   GET   /api/dials            Dial の一覧 / PATCH /api/dials/<mac> { role?, owner?, seat?, label? } / DELETE で一覧から消す
 //   POST  /api/card             { mac, uid }  Dial にカードがかざされた（返事はタブ区切り 1 行。tapCard を見る）
-//   POST  /api/card/claim       { mac, uid }  未設定の Dial をそのカードの人の専用にする（固定席）
 //   GET   /api/events           状態が変わるたびに "state" を送る（Server-Sent Events）
 //   GET   /api/device           StopWatch / Dial 用の軽い形式（1行1席のタブ区切り。#t 行は時間のひとことの残り秒）
 //   POST  /api/parts            パーツで作ったキャラを足す { by, label, feature, recipe, image }
@@ -611,7 +610,7 @@ function tapSeat(id, seat) {
 
 // Dial にカードがかざされた。Dial に返す1行（タブ区切り）の中身 [種類, ...]
 //   code 1234          未登録のカード（/join かマイページでこの番号を入れる）
-//   固定席      in / out 名前 (claim)   在席にした / 不在にした（claim：未設定の Dial なので「長押しで自分専用に」も出す）
+//   固定席      in / out 名前           在席にした / 不在にした
 //               deny 持ち主の名前       ほかの人専用の Dial
 //   フリーアドレス sit 名前 席 / back 名前 席 / leave 名前 席   座った / 離席から戻った / 帰った（席が空いた）
 //               nodesk 名前             この Dial の机がまだ決まっていない（/admin で決める）
@@ -626,7 +625,7 @@ function tapCard(mac, uid) {
   else {
     const present = !state.members[who.id].present;
     applyPatch(who.id, { present });
-    out = [present ? "in" : "out", who.name, dial.role === "none" ? "claim" : ""];
+    out = [present ? "in" : "out", who.name];
   }
   console.log(`[card] Dial ${mac.slice(-4)}（${dial.role}${dial.seat ? " " + dial.seat : ""}）→ ${out[0]} ${out[1] || ""}`);
   return out;
@@ -766,14 +765,13 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { action, state: publicState() });
   }
 
-  // Dial にカードがかざされた / 長押しで専用にする。返事は Dial が読みやすいようにタブ区切りの1行
-  if ((p === "/api/card" || p === "/api/card/claim") && req.method === "POST") {
+  // Dial にカードがかざされた。返事は Dial が読みやすいようにタブ区切りの1行
+  if (p === "/api/card" && req.method === "POST") {
     let body;
     try { body = await readBody(req); } catch { return sendText(res, 400, "ng\tJSON が読めません"); }
     const mac = registry.cleanMac(body && body.mac);
     const uid = String((body && body.uid) || "").toUpperCase().replace(/[^0-9A-F]/g, "");
     if (!registry.isMac(mac) || uid.length < 8 || uid.length > 20) return sendText(res, 400, "ng\tmac か uid がおかしい");
-    if (p === "/api/card/claim") return sendText(res, 200, registry.claimByCard(mac, uid));
     return sendText(res, 200, tapCard(mac, uid).map((x) => String(x).replace(/[\t\r\n]+/g, " ")).join("\t"));
   }
 
@@ -785,7 +783,7 @@ const server = http.createServer(async (req, res) => {
     else {
       let body;
       try { body = await readBody(req); } catch { return sendJson(res, 400, { error: "JSON が読めません" }); }
-      error = registry.linkCard(cm[1], body && body.code, !!(body && body.claimDial));
+      error = registry.linkCard(cm[1], body && body.code);
     }
     if (error) return sendJson(res, 400, { error });
     return sendJson(res, 200, publicState());

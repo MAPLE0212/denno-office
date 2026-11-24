@@ -64,10 +64,6 @@
 #cardCode { font-family: var(--font-mono); letter-spacing: .3em; max-width: 12em; }
 .welcome { border-color: var(--glow); box-shadow: 0 0 18px rgba(127, 162, 255, .2); }
 .welcome p { margin: 0; }
-.dials { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
-.dials:empty { display: none; }
-.dials li { display: flex; gap: 10px; align-items: center; justify-content: space-between; border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
-.dials small { font-family: var(--font-mono); color: var(--muted); font-size: 11px; margin-left: 6px; }
 .inputrow { display: flex; gap: 8px; align-items: stretch; }
 .inputrow input {
   flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--panel-2);
@@ -207,9 +203,7 @@
         <button class="btn primary" id="cardLink" disabled>このカードにする</button>
       </div>
       <div class="codestat" id="codeStat"></div>
-      <label class="check" id="claimRow" hidden><input type="checkbox" id="claim" checked> この Dial を自分専用にする（ほかの人のカードは受け付けなくなります）</label>
       <p class="hint" id="cardHint"></p>
-      <ul class="dials" id="dials"></ul>
     </section>
 
     <section class="card">
@@ -377,7 +371,7 @@ function renderMine() {
   ] : [Object.assign(document.createElement("span"), { textContent: "まだカードを登録していません" })]));
   $("cardHint").textContent = free
     ? "まだ登録していないカードを、どれかの Dial にかざすと 4 桁の数字が出ます。その数字を入れると、そのカードがあなたのものになります（10 分以内）。前のカードは使えなくなります。"
-    : "新しいカードを Dial にかざすと 4 桁の数字が出ます。それを入れると、そのカードに切り替わります（10 分以内。前のカードは使えなくなります）。まだ誰のものでもない Dial に登録済みのカードをかざして、つまみを長押ししても自分専用にできます。";
+    : "新しいカードを全体用の Dial にかざすと 4 桁の数字が出ます。それを入れると、そのカードに切り替わります（10 分以内。前のカードは使えなくなります）。";
 
   // 定型文（見出しごと）。オリジナルが変わったら並べ直す
   const origs = m.originals || [];
@@ -581,7 +575,7 @@ function renderSeats(m) {
 }
 
 // ---------- カードと Dial ----------
-let codeInfo = null; // { canClaim, usedBy } 番号を確かめられたとき
+let codeInfo = null; // { usedBy } 番号を確かめられたとき
 let checking = 0;
 
 async function cardRequest(method, body) {
@@ -594,12 +588,11 @@ async function cardRequest(method, body) {
   renderMine();
 }
 
-// 4 桁そろったら、その番号のカードを確かめる（ほかの人のカードではないか・Dial を自分専用にできるか）
+// 4 桁そろったら、その番号のカードを確かめる（ほかの人のカードではないか）
 async function checkCode() {
   const code = $("cardCode").value.replace(/\D/g, "");
   $("cardCode").value = code;
   codeInfo = null;
-  $("claimRow").hidden = true;
   $("cardLink").disabled = true;
   const st = $("codeStat");
   st.className = "codestat";
@@ -615,7 +608,6 @@ async function checkCode() {
     codeInfo = json;
     st.classList.add("ok");
     st.textContent = json.usedBy ? "今のカードと同じです" : "カードが見つかりました";
-    $("claimRow").hidden = !json.canClaim;
     $("cardLink").disabled = false;
   } catch (e) {
     if (my !== checking) return;
@@ -628,10 +620,9 @@ async function linkCard() {
   if (!codeInfo) return;
   $("cardLink").disabled = true;
   try {
-    await cardRequest("POST", { code: $("cardCode").value, claimDial: codeInfo.canClaim && $("claim").checked });
+    await cardRequest("POST", { code: $("cardCode").value });
     $("cardCode").value = "";
     checkCode();
-    loadDials();
     Denno.toast("カードを登録しました");
   } catch (e) {
     Denno.toast(e.message, true);
@@ -646,31 +637,6 @@ async function unlinkCard() {
 $("cardCode").addEventListener("input", checkCode);
 $("cardLink").addEventListener("click", linkCard);
 $("cardCode").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) linkCard(); });
-
-// 自分専用の Dial（固定席）
-async function loadDials() {
-  if (!myId || (state && state.mode === "free")) { $("dials").replaceChildren(); return; }
-  let list = [];
-  try { list = await (await fetch("/api/dials")).json(); } catch {}
-  $("dials").replaceChildren(...list.filter((d) => d.owner === myId).map((d) => {
-    const li = document.createElement("li");
-    const t = document.createElement("span");
-    t.textContent = `${d.label || "Dial"}（自分専用）`;
-    const mac = document.createElement("small");
-    mac.textContent = `${d.mac.slice(-4).toUpperCase()}${d.online ? "・つながっています" : ""}`;
-    t.append(mac);
-    const b = document.createElement("button");
-    b.className = "btn";
-    b.textContent = "専用をやめる";
-    b.addEventListener("click", async () => {
-      if (!confirm("この Dial を自分専用でなくしますか？（まだ誰のものでもない Dial に戻ります）")) return;
-      const res = await fetch(`/api/dials/${d.mac}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "none" }) });
-      if (res.ok) { Denno.toast("専用をやめました"); loadDials(); } else Denno.toast("変えられませんでした", true);
-    });
-    li.append(t, b);
-    return li;
-  }));
-}
 
 $("presence").addEventListener("click", () => {
   const m = me();
@@ -718,12 +684,10 @@ if (myId && new URLSearchParams(location.search).has("welcome")) {
   setTimeout(() => $("charaCard").scrollIntoView({ behavior: "smooth", block: "start" }), 600);
 }
 loadCharacters();
-window.addEventListener("focus", () => { loadCharacters(); loadDials(); });
-let firstState = true;
+window.addEventListener("focus", () => { loadCharacters(); });
 Denno.subscribe((s) => {
   state = s;
   if (myId) renderMine(); else renderPicker();
-  if (firstState) { firstState = false; loadDials(); }
 }, $("conn"));
 setInterval(() => { if (state && myId) renderMine(); }, 30000); // 残り時間の表示を更新
 </script>

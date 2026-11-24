@@ -100,7 +100,7 @@ function renderMode() {
   $("tapLink").hidden = !free();
   $("dialHint").innerHTML = free()
     ? "Wi-Fi につながった Dial は自動でここに出ます。Dial の画面下に出ている 4 桁（MAC の下 4 桁）で見分けて、<b>置いた机</b>を選んでください。机は 1 つの Dial にだけ決められます（ほかの Dial と同じ机にすると、前の Dial は外れます）。"
-    : "Wi-Fi につながった Dial は自動でここに出ます。<b>全体用</b>：登録したカードなら誰でも在席を切り替えられ、新しいカードの登録番号も出ます。<b>個人用</b>：その人のカードだけを受け付けます（持ち主が不在のあいだ、画面の背景がゆっくり光ります）。<b>未設定</b>：カードで在席を切り替えられ、長押しでかざした人の専用になります。";
+    : "Wi-Fi につながった Dial は自動でここに出ます。<b>全体用</b>：登録したカードなら誰でも在席を切り替えられ、新しいカードの登録番号も出ます。<b>個人用</b>：その人のカードだけを受け付けます（持ち主が不在のあいだ、画面の背景がゆっくり光ります）。<b>未設定</b>：全体用と同じです。";
   $("memberHint").textContent = free()
     ? "「いつもの席」は、マイページで席を選ばずに在席にしたときに座る席です（無くてもよく、何人かで同じ席でもかまいません）。「サンプル」の人は、誰かが登録すると全員消えます。"
     : "「サンプル」の人がいる席は空き席として扱い、誰かが登録すると入れ替わります。消した人のキャラ（パーツで作ったもの）は残ります。";
@@ -142,7 +142,7 @@ function renderDials() {
       role.addEventListener("change", send);
       owner.addEventListener("change", send);
       roles.append(role, owner);
-      now = d.role === "personal" ? `${d.ownerName || "?"} さんのカードだけ` : d.role === "shared" ? "登録したカードなら誰でも" : "かざした人が長押しで専用にできる";
+      now = d.role === "personal" ? `${d.ownerName || "?"} さんのカードだけ` : d.role === "shared" ? "登録したカードなら誰でも" : "全体用と同じ";
     }
     const del = el("button", { className: "del", textContent: "×", title: "一覧から消す" });
     del.setAttribute("aria-label", `Dial ${d.mac.slice(-4)} を一覧から消す`);

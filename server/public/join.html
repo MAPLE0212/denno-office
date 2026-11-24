@@ -49,7 +49,6 @@ ol.how li { margin-bottom: 2px; }
       <input class="codein" id="code" type="text" inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="off" aria-label="Dial に出た番号">
     </div>
     <div class="codestat" id="codeStat"></div>
-    <label class="check" id="claimRow" hidden><input type="checkbox" id="claim" checked> この Dial を自分専用にする（ほかの人のカードは受け付けなくなります）</label>
     <p class="hint">カードはあとからマイページでも登録できます。番号は 10 分で切れます。</p>
   </section>
 
@@ -77,7 +76,7 @@ function renderMode() {
     : "使われている席は選べません。席を変えたいときは管理（/admin）で直せます。";
   $("how").innerHTML = free()
     ? "<li>どれかの<b>机の Dial</b>にカードをかざす</li><li>Dial に出た 4 桁の番号を入れる</li>"
-    : "<li>机に<b>自分の Dial</b>があればその Dial に、なければ<b>全体用の Dial</b>にカードをかざす</li><li>Dial に出た 4 桁の番号を入れる</li>";
+    : "<li><b>全体用の Dial</b>にカードをかざす</li><li>Dial に出た 4 桁の番号を入れる</li>";
 }
 
 function renderSeats() {
@@ -111,7 +110,6 @@ async function checkCode() {
   const code = $("code").value.replace(/\D/g, "");
   $("code").value = code;
   codeInfo = null;
-  $("claimRow").hidden = true;
   const st = $("codeStat");
   st.className = "codestat";
   if (code.length < 4) { st.textContent = ""; update(); return; }
@@ -126,7 +124,6 @@ async function checkCode() {
     codeInfo = json;
     st.classList.add("ok");
     st.textContent = json.dialRole === "shared" ? "カードが見つかりました（全体用の Dial）" : "カードが見つかりました";
-    $("claimRow").hidden = !json.canClaim;
   } catch (e) {
     if (my !== checking) return;
     st.classList.add("ng");
@@ -150,7 +147,7 @@ $("code").addEventListener("input", checkCode);
 $("go").addEventListener("click", async () => {
   $("go").disabled = true;
   const body = { name: $("name").value.trim(), seat };
-  if (codeInfo) Object.assign(body, { code: $("code").value, claimDial: codeInfo.canClaim && $("claim").checked });
+  if (codeInfo) body.code = $("code").value;
   try {
     const res = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const json = await res.json().catch(() => ({}));
