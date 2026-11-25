@@ -57,11 +57,11 @@ const FREE = SEAT_MODE === "free";
 // 席（島1つ・6席）。A が手前の列、B が奥の列
 const SEAT_CODES = ["A1", "A2", "A3", "B1", "B2", "B3"];
 
-// 名簿・カード・Dial（registry.js）。最初の起動だけ members.json（無ければ members.example.json のサンプル）から名簿を作る
+// 名簿・カード・Dial（registry.js）。最初の起動だけ members.json があればそこから名簿を作る
 const { createRegistry } = require("./registry");
 const registry = createRegistry({
   dataDir: path.dirname(DATA_FILE),
-  seedFiles: ["members.json", "members.example.json"].map((f) => path.join(__dirname, f)),
+  seedFiles: [path.join(__dirname, "members.json")],
   seats: SEAT_CODES,
   mode: SEAT_MODE,
   onChange() { syncMembers(); save(); broadcast(); },
@@ -482,7 +482,6 @@ function publicState() {
         name: info.name,
         seat: seats[info.id],                   // 今座っている席（固定席は自分の席。席が無い・重なった人は null）
         homeSeat: FREE ? info.seat : null,      // フリーアドレスの「いつもの席」
-        sample: !!info.sample,
         card: info.card,
         present: m.present,
         comment: m.comment,

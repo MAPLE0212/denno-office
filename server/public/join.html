@@ -80,9 +80,9 @@ function renderMode() {
 }
 
 function renderSeats() {
-  // 固定席：ほかの人の席は選べない（サンプルの人の席は選べる）。フリーアドレス：いつもの席なので重なってよい
+  // 固定席：ほかの人の席は選べない。フリーアドレス：いつもの席なので重なってよい
   const holder = free() ? {} : Object.fromEntries(state.members.filter((m) => m.seat).map((m) => [m.seat, m]));
-  if (seat && holder[seat] && !holder[seat].sample) seat = null; // 先に誰かが取った
+  if (seat && holder[seat]) seat = null; // 先に誰かが取った
   const kids = [];
   ROWS.forEach(([label, codes], r) => {
     const l = document.createElement("span");
@@ -93,7 +93,7 @@ function renderSeats() {
       const h = holder[code];
       const b = document.createElement("button");
       b.type = "button";
-      b.disabled = !!h && !h.sample;
+      b.disabled = !!h;
       b.setAttribute("aria-pressed", String(seat === code));
       b.innerHTML = "<b></b><span></span>";
       b.querySelector("b").textContent = code;

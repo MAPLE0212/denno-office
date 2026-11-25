@@ -20,7 +20,6 @@
 .item .on { color: var(--ok); }
 .item select, .item input { font: inherit; font-size: 14px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; width: 100%; min-width: 0; }
 .roles { display: flex; gap: 6px; }
-.tag { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); margin-left: 6px; }
 .cardst { font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .cardst b { color: var(--ok); font-weight: 400; }
 .cardst .no { color: var(--muted); }
@@ -102,15 +101,14 @@ function renderMode() {
     ? "Wi-Fi につながった Dial は自動でここに出ます。Dial の画面下に出ている 4 桁（MAC の下 4 桁）で見分けて、<b>置いた机</b>を選んでください。机は 1 つの Dial にだけ決められます（ほかの Dial と同じ机にすると、前の Dial は外れます）。"
     : "Wi-Fi につながった Dial は自動でここに出ます。<b>全体用</b>：登録したカードなら誰でも在席を切り替えられ、新しいカードの登録番号も出ます。<b>個人用</b>：その人のカードだけを受け付けます（持ち主が不在のあいだ、画面の背景がゆっくり光ります）。<b>未設定</b>：全体用と同じです。";
   $("memberHint").textContent = free()
-    ? "「いつもの席」は、マイページで席を選ばずに在席にしたときに座る席です（無くてもよく、何人かで同じ席でもかまいません）。「サンプル」の人は、誰かが登録すると全員消えます。"
-    : "「サンプル」の人がいる席は空き席として扱い、誰かが登録すると入れ替わります。消した人のキャラ（パーツで作ったもの）は残ります。";
+    ? "「いつもの席」は、マイページで席を選ばずに在席にしたときに座る席です（無くてもよく、何人かで同じ席でもかまいません）。消した人のキャラ（パーツで作ったもの）は残ります。"
+    : "消した人のキャラ（パーツで作ったもの）は残ります。";
 }
 
 function renderDials() {
   if (!state) return;
   if (!dials.length) { $("dials").replaceChildren(el("p", { className: "empty", textContent: "まだ Dial がつながっていません。Dial の電源を入れて、サーバとつながるのを待ってください。" })); return; }
   if ($("dials").contains(document.activeElement)) return; // 入力中は描き直さない
-  const real = state.members.filter((m) => !m.sample);
   $("dials").replaceChildren(...dials.map((d) => {
     const label = el("input", { value: d.label, placeholder: free() ? "メモ（窓ぎわ など）" : "名前（例：入口）", maxLength: 20 });
     label.addEventListener("change", () => act(() => api("PATCH", `/api/dials/${d.mac}`, { label: label.value }), "名前を変えました"));
@@ -133,7 +131,7 @@ function renderDials() {
       for (const [v, t] of [["none", "未設定"], ["shared", "全体用"], ["personal", "個人用"]]) role.append(el("option", { value: v, textContent: t, selected: d.role === v }));
       const owner = el("select", { hidden: d.role !== "personal" });
       owner.append(el("option", { value: "", textContent: "誰の？" }));
-      for (const m of real) owner.append(el("option", { value: m.id, textContent: `${m.seat || "席なし"} ${m.name}`, selected: d.owner === m.id }));
+      for (const m of state.members) owner.append(el("option", { value: m.id, textContent: `${m.seat || "席なし"} ${m.name}`, selected: d.owner === m.id }));
       const send = () => {
         owner.hidden = role.value !== "personal";
         if (role.value === "personal" && !owner.value) return;
@@ -163,14 +161,14 @@ function renderMembers() {
   $("members").replaceChildren(...state.members.map((m) => {
     const name = el("input", { value: m.name, maxLength: 20 });
     name.addEventListener("change", () => act(() => api("PATCH", `/api/admin/members/${m.id}`, { name: name.value }), "名前を変えました"));
-    const nameBox = el("div", {}, name, el("div", { className: "sub" }, `/me/${m.id}`, m.sample ? el("span", { className: "tag", textContent: "サンプル" }) : ""));
+    const nameBox = el("div", {}, name, el("div", { className: "sub" }, el("a", { href: `/me/${m.id}`, textContent: `/me/${m.id}`, title: "この人のマイページ（本人に渡す）" })));
 
     const seat = el("select", { title: free() ? "いつもの席" : "席" });
     if (free() || !seatOf(m)) seat.append(el("option", { value: "", textContent: free() ? "いつもの席なし" : "席なし", selected: !seatOf(m) }));
     for (const s of state.seats) {
       const h = taken[s];
-      seat.append(el("option", { value: s, textContent: h && h.id !== m.id ? `${s}（${h.name}${h.sample ? "・サンプル" : ""}）` : free() ? `いつも ${s}` : s,
-        selected: s === seatOf(m), disabled: !!h && h.id !== m.id && !h.sample }));
+      seat.append(el("option", { value: s, textContent: h && h.id !== m.id ? `${s}（${h.name}）` : free() ? `いつも ${s}` : s,
+        selected: s === seatOf(m), disabled: !!h && h.id !== m.id }));
     }
     seat.addEventListener("change", () => act(() => api("PATCH", `/api/admin/members/${m.id}`, { seat: seat.value || null }), "席を変えました"));
 

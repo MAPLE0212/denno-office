@@ -52,7 +52,7 @@ python3 -m http.server 8800
 node server/server.js
 ```
 
-`http://localhost:8080/me` で自分を選び、キャラのタブから選ぶと、`http://localhost:8080/` のオフィスに座ります。
+`http://localhost:8080/join` で自分を登録すると（試すだけならカードは無くてよい）マイページに移るので、「設定の編集」のキャラから選ぶと、`http://localhost:8080/` のオフィスに座ります。
 
 Claude Code のデスクトップアプリなら、Claude に「ブラウザで見せて」と頼むと、上のサーバを動かしてアプリの中のブラウザで開き、画面を見ながら直してくれます。
 

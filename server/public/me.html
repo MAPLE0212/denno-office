@@ -33,8 +33,6 @@
 .presets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .presets .pgroup { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
 .presets .plabel { font-size: 11px; color: var(--muted); min-width: 4.5em; }
-.orig { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-.orig h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
 .orig .list { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 10px; }
 .orig .list .chip { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
 .orig .list .chip button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; line-height: 1; }
@@ -133,13 +131,9 @@
   .mstage { aspect-ratio: 4 / 3; }
 }
 
-.pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.pick a {
-  display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
-  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 8px; color: var(--fg);
-}
-.pick a:hover { border-color: var(--accent); text-decoration: none; }
-.pick small { display: block; font-family: var(--font-mono); color: var(--muted); font-size: 11px; }
+.sethead { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; }
+.sethead h2 { margin: 0; font-size: 18px; }
+.hero .edit { font-size: 13px; }
 
 @media (max-width: 480px) {
   .hero { grid-template-columns: 76px 1fr; gap: 14px; }
@@ -155,24 +149,21 @@
     <nav>
       <span class="conn" id="conn">接続中…</span>
       <a href="/">オフィスを見る</a>
-      <a href="/me" id="switch" hidden>人を切り替え</a>
+      <a href="#settings" id="navEdit" hidden>設定の編集</a>
     </nav>
   </header>
 
-  <!-- 自分を選ぶ（/me） -->
-  <section class="card" id="picker" hidden>
-    <h2>あなたはどなたですか？</h2>
-    <div class="pick" id="pickList"></div>
-    <p class="hint">選んだページをブックマークしておくと、次からすぐ開けます。はじめての人は <a href="/join">登録</a> から。</p>
+  <!-- 自分のページが分からないとき（/me） -->
+  <section class="card" id="nobody" hidden>
+    <h2 id="nobodyTitle">マイページ</h2>
+    <p id="nobodyText"></p>
+    <p class="hint">はじめての人は <a href="/join">登録</a> から。登録したあとに開いたページ（<code>/me/…</code>）をブックマークしておくと、次からすぐ開けます。ほかの端末で開くときは、そのページのアドレスを使ってください（分からなければ管理の人に聞いてください）。</p>
   </section>
 
   <!-- マイページ（/me/<id>） -->
   <div id="mine" hidden>
-    <section class="card welcome" id="welcome" hidden>
-      <h2>登録できました</h2>
-      <p>最後に、オフィスで座るキャラを下の「キャラ」から選んでください。「パーツで作成」のタブでは自分で作れます。</p>
-    </section>
-
+  <!-- ふだん使うところ -->
+  <div id="home">
     <section class="card hero">
       <div id="heroAvatar"></div>
       <div>
@@ -183,6 +174,7 @@
             <span class="knob" aria-hidden="true"></span><span id="presenceLabel">不在</span>
           </button>
           <button class="btn" id="leave" hidden>帰る（席を空ける）</button>
+          <a class="edit" href="#settings">設定の編集（カード・言葉・キャラ）</a>
         </div>
         <p class="back" id="backHint" hidden></p>
         <p class="hint" id="resetHint"></p>
@@ -193,23 +185,6 @@
       <h2>席（フリーアドレス）</h2>
       <div class="seatmap" id="seatmap"></div>
       <p class="hint">空いている席を押すと、今日はそこに座ります。「Dial」の印がある机は、机の Dial にカードをかざしても座れます（もう一度かざすと帰る）。席の NFC タグにスマホでタッチしても座れます。</p>
-    </section>
-
-    <section class="card">
-      <h2>カード</h2>
-      <div class="cardstate" id="cardState"></div>
-      <div class="inputrow">
-        <input id="cardCode" type="text" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off" aria-label="Dial に出た4桁の数字">
-        <button class="btn primary" id="cardLink" disabled>このカードにする</button>
-      </div>
-      <div class="codestat" id="codeStat"></div>
-      <p class="hint" id="cardHint"></p>
-    </section>
-
-    <section class="card">
-      <h2>Dial の言葉</h2>
-      <span class="seg" id="langs" role="group" aria-label="Dial の言葉"></span>
-      <p class="hint" id="langHint"></p>
     </section>
 
     <section class="card">
@@ -231,8 +206,42 @@
         </div>
       </div>
       <p class="hint">StopWatch の吹き出しに見えるのは先頭5文字くらいです。在席にしていないあいだは吹き出しは出ません。</p>
+      <p class="hint">自分の定型文（オリジナル）は「設定の編集」で足せます。</p>
+    </section>
+  </div>
+
+  <!-- 設定の編集（#settings） -->
+  <div id="settings" hidden>
+    <div class="sethead">
+      <a href="#">← もどる</a>
+      <h2>設定の編集</h2>
+    </div>
+
+    <section class="card welcome" id="welcome" hidden>
+      <h2>登録できました</h2>
+      <p>最後に、オフィスで座るキャラを下の「キャラ」から選んでください。「パーツで作成」のタブでは自分で作れます。</p>
+    </section>
+
+    <section class="card">
+      <h2>カード</h2>
+      <div class="cardstate" id="cardState"></div>
+      <div class="inputrow">
+        <input id="cardCode" type="text" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off" aria-label="Dial に出た4桁の数字">
+        <button class="btn primary" id="cardLink" disabled>このカードにする</button>
+      </div>
+      <div class="codestat" id="codeStat"></div>
+      <p class="hint" id="cardHint"></p>
+    </section>
+
+    <section class="card">
+      <h2>Dial の言葉</h2>
+      <span class="seg" id="langs" role="group" aria-label="Dial の言葉"></span>
+      <p class="hint" id="langHint"></p>
+    </section>
+
+    <section class="card">
+      <h2>オリジナルの文</h2>
       <div class="orig">
-        <h3>オリジナル</h3>
         <div class="list" id="origList"></div>
         <div class="inputrow">
           <input id="origText" type="text" placeholder="自分の定型文を足す" autocomplete="off" aria-label="オリジナルの文">
@@ -275,6 +284,7 @@
       <p class="hint">ドラッグで回して見られます。保存すると「パーツで作成」のタブに入り、オフィスでもこの子が座ります。</p>
     </section>
   </div>
+  </div>
 </div>
 
 <script src="/common.js"></script>
@@ -294,32 +304,36 @@ let duration = "2h";
 let author = null; // いま開いている作成者のタブ
 let queue = Promise.resolve();
 
-// ---------- /me：自分を選ぶ ----------
+// ---------- /me：このブラウザで前に開いた自分のページへ。ほかの人の一覧は出さない ----------
+function showNobody(gone) {
+  $("mine").hidden = true;
+  $("navEdit").hidden = true;
+  $("nobody").hidden = false;
+  $("nobodyTitle").textContent = gone ? "このページの人は見つかりません" : "マイページ";
+  $("nobodyText").textContent = gone
+    ? "名簿から消されたようです。もう一度登録するか、管理の人に聞いてください。"
+    : "このブラウザでは、まだマイページを開いていません。";
+}
 if (!myId) {
   let saved = null;
   try { saved = localStorage.getItem("denno.me"); } catch {}
   if (saved) location.replace(`/me/${saved}`);
-  $("picker").hidden = false;
+  else showNobody(false);
 } else {
   try { localStorage.setItem("denno.me", myId); } catch {}
   $("mine").hidden = false;
-  $("switch").hidden = false;
 }
-$("switch").addEventListener("click", () => { try { localStorage.removeItem("denno.me"); } catch {} });
 
-function renderPicker() {
-  const list = $("pickList");
-  list.replaceChildren(...state.members.map((m) => {
-    const a = document.createElement("a");
-    a.href = `/me/${m.id}`;
-    const name = document.createElement("div");
-    name.innerHTML = `<small></small><span></span>`;
-    name.querySelector("small").textContent = state.mode !== "free" ? (m.seat || "席なし") : m.seat ? `${m.seat}${m.present ? "" : " 離席"}` : "—";
-    name.querySelector("span").textContent = m.name;
-    a.append(Denno.avatar(m.character), name);
-    return a;
-  }));
+// ふだんの画面と「設定の編集」（#settings）を切り替える
+function route() {
+  const set = location.hash === "#settings";
+  $("home").hidden = set;
+  $("settings").hidden = !set;
+  $("navEdit").hidden = set || !myId; // 設定の編集では上の「← もどる」で戻る
+  window.scrollTo(0, 0);
 }
+window.addEventListener("hashchange", route);
+route();
 
 // ---------- マイページ ----------
 function me() { return state.members.find((m) => m.id === myId); }
@@ -327,8 +341,8 @@ function me() { return state.members.find((m) => m.id === myId); }
 function renderMine() {
   const m = me();
   if (!m) {
-    try { localStorage.removeItem("denno.me"); } catch {}
-    $("mine").hidden = true; $("picker").hidden = false; renderPicker(); return;
+    try { if (localStorage.getItem("denno.me") === myId) localStorage.removeItem("denno.me"); } catch {}
+    showNobody(true); return;
   }
   document.title = `${m.name}さんのマイページ｜電脳オフィス`;
   $("heroName").textContent = `${m.name} さん`;
@@ -411,7 +425,7 @@ function renderMine() {
       return c;
     }));
     const max = state.originalsMax || 10;
-    $("origHint").textContent = `${origs.length}/${max} 個。ここに足した文は、上の定型文と Dial の「オリジナル」（星）に出ます。`;
+    $("origHint").textContent = `${origs.length}/${max} 個。ここに足した文は、ひとりごとの定型文と Dial の「オリジナル」（星）に出ます。`;
   }
   if (!$("durations").childElementCount) {
     $("durations").replaceChildren(...state.durations.map((d) => {
@@ -680,14 +694,15 @@ async function loadCharacters() {
 // ---------- 起動 ----------
 if (myId && new URLSearchParams(location.search).has("welcome")) {
   $("welcome").hidden = false;
-  history.replaceState(null, "", `/me/${myId}`);
+  history.replaceState(null, "", `/me/${myId}#settings`);
+  route();
   setTimeout(() => $("charaCard").scrollIntoView({ behavior: "smooth", block: "start" }), 600);
 }
 loadCharacters();
 window.addEventListener("focus", () => { loadCharacters(); });
 Denno.subscribe((s) => {
   state = s;
-  if (myId) renderMine(); else renderPicker();
+  if (myId) renderMine();
 }, $("conn"));
 setInterval(() => { if (state && myId) renderMine(); }, 30000); // 残り時間の表示を更新
 </script>
