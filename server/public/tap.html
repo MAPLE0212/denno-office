@@ -17,13 +17,6 @@
 .result.leave .msg { color: var(--muted); }
 .result.err .msg { color: var(--danger); }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
-.pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-.pick button {
-  display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; text-align: left; cursor: pointer;
-  border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 8px; color: var(--fg);
-}
-.pick button:hover { border-color: var(--accent); }
-.pick small { display: block; font-family: var(--font-mono); color: var(--muted); font-size: 11px; }
 .urls { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .urls li { display: flex; gap: 10px; align-items: center; justify-content: space-between; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
 .urls code { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
@@ -47,11 +40,11 @@
     <div class="actions" id="rActions"></div>
   </section>
 
-  <!-- このスマホはだれの？（初めてのとき） -->
+  <!-- このスマホでまだマイページを開いていないとき。ほかの人の一覧は出さない -->
   <section class="card" id="picker" hidden>
-    <h2>このスマホはどなたのですか？</h2>
-    <div class="pick" id="pickList"></div>
-    <p class="hint">一度選ぶと、このスマホが覚えます。次からはタグにかざすだけです。</p>
+    <h2>このスマホでは、まだだれか分かりません</h2>
+    <p>このスマホで一度だけ、自分のマイページを開いてください。そのあとはタグにかざすだけで座れます。</p>
+    <p class="hint">マイページは、登録したあとに出たページ（<code id="meUrl"></code>）です。タグをかざしたときに開くブラウザで、このページと同じアドレス（<code id="origin"></code>）から開いてください。はじめての人は <a href="/join">登録</a> から。</p>
   </section>
 
   <!-- /tap：タグに書き込む URL -->
@@ -71,7 +64,7 @@ const done = new URLSearchParams(location.search).has("done"); // 再読み込�
 let state = null;
 
 function getMe() { try { return localStorage.getItem("denno.me"); } catch { return null; } }
-function setMe(id) { try { id ? localStorage.setItem("denno.me", id) : localStorage.removeItem("denno.me"); } catch {} }
+function forgetMe() { try { localStorage.removeItem("denno.me"); } catch {} }
 function member(id) { return state && state.members.find((m) => m.id === id); }
 
 function button(label, onClick, primary) {
@@ -93,22 +86,16 @@ function show(kind, msg, who, actions = []) {
   $("rActions").replaceChildren(...actions);
 }
 
+// このスマホの人は、マイページを開いたときに覚えた人（denno.me）
 function showPicker() {
   $("result").hidden = true;
   $("picker").hidden = false;
-  $("pickList").replaceChildren(...state.members.map((m) => {
-    const b = document.createElement("button");
-    const name = document.createElement("div");
-    name.innerHTML = "<small></small><span></span>";
-    name.querySelector("small").textContent = m.seat || "—";
-    name.querySelector("span").textContent = m.name;
-    b.append(Denno.avatar(m.character), name);
-    b.addEventListener("click", () => { setMe(m.id); tap(); });
-    return b;
-  }));
+  $("meUrl").textContent = `${location.origin}/me/…`;
+  $("origin").textContent = location.origin;
 }
 
-const others = () => button("別の人です", () => { setMe(null); showPicker(); });
+// 別の人のスマホだったとき：覚えた人を忘れる（次は自分のマイページを開き直す）
+const others = () => button("わたしではない", () => { forgetMe(); showPicker(); });
 
 // 今の状態だけを見せる（再読み込みのとき）
 function showNow() {
